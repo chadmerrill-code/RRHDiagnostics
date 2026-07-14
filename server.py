@@ -156,7 +156,7 @@ def fetch_healthcheck():
 
     # Step 2: poll until result is available (max ~2 min)
     poll_url = f"{IOP_BASE}/neops/enodeb/healthcheck/request/{request_id}"
-    for attempt in range(13):
+    for attempt in range(31):
         if attempt > 0:
             time.sleep(10)
         try:
