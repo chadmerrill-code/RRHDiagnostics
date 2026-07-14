@@ -157,7 +157,7 @@ def fetch_healthcheck():
         or node_data.get("eNodeBs")
         or []
     )
-    _id_fields = ("enodeb_id", "enodebId", "eNodeBId", "nodeId", "id", "enodeb", "eNBId")
+    _id_fields = ("node", "enodeb_id", "enodebId", "eNodeBId", "nodeId", "id", "enodeb", "eNBId")
     enodeb_ids = []
     for n in node_list:
         if isinstance(n, (str, int)):
