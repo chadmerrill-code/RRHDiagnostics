@@ -244,7 +244,7 @@ def fetch_healthcheck():
     request_id = str(request_id)
     poll_url = f"{IOP_BASE}/neops/enodeb/healthcheck/request/{request_id}"
 
-    for attempt in range(31):
+    for attempt in range(40):
         if attempt > 0:
             time.sleep(10)
         try:
