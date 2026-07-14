@@ -1024,9 +1024,19 @@ function _hcField(item){
 }
 
 function renderHCList(data,panel,start,end){
-  var items=data.enodeb_healthcheck_list||data.data||data.results||data.healthchecks||(Array.isArray(data)?data:[]);
-  if(!items.length){
-    panel.innerHTML='<div class="hc-list-hdr">No health checks found ('+(start||'?')+' – '+(end||'?')+')</div>';
+  // Try known wrapper keys, then any array value in the object, then bare array
+  var items=null;
+  var wrappers=['enodeb_healthcheck_list','enodeb_healthchecks','healthcheck_list','data','results','healthchecks','list','items','records'];
+  for(var i=0;i<wrappers.length;i++){if(Array.isArray(data[wrappers[i]])){items=data[wrappers[i]];break;}}
+  if(!items&&Array.isArray(data)) items=data;
+  if(!items){
+    // last resort: find any non-empty array in the response
+    var keys=Object.keys(data||{});
+    for(var j=0;j<keys.length;j++){if(Array.isArray(data[keys[j]])&&data[keys[j]].length){items=data[keys[j]];break;}}
+  }
+  if(!items||!items.length){
+    var dbgKeys=Object.keys(data||{}).join(', ')||'(empty)';
+    panel.innerHTML='<div class="hc-list-hdr">No health checks found ('+(start||'?')+' – '+(end||'?')+') &mdash; response keys: '+escHtml(dbgKeys)+'</div>';
     return;
   }
   var rows=items.map(function(item){
@@ -1034,7 +1044,7 @@ function renderHCList(data,panel,start,end){
     var status=_hcField(item,'status','statusText');
     var rtype=_hcField(item,'req_type','reqType','type','request_type')||'On-Demand';
     var by=_hcField(item,'created_by','createdBy','user','eid','created_user');
-    var date=_hcField(item,'created_at','createdAt','ondemandcheck_start_time','start_date','startDate','date','timestamp','created_date','request_date');
+    var date=_hcField(item,'created_on','createdOn','created_at','createdAt','ondemandcheck_start_time','start_date','startDate','date','timestamp','created_date','request_date');
     var disp=date.slice(0,16).replace('T',' ')||'—';
     var sCls=/complet/i.test(status)?'hc-s-done':/fail|error/i.test(status)?'hc-s-fail':'hc-s-pend';
     var canLoad=/complet/i.test(status);
