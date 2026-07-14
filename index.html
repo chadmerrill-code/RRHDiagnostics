@@ -104,9 +104,9 @@
   .download-btn{padding:9px 20px;background:#1f6feb;border:none;border-radius:6px;color:#fff;font-size:.85em;font-weight:600;cursor:pointer;transition:background .2s}
   .download-btn:hover{background:#388bfd}
   .download-btn:disabled{background:#555;cursor:not-allowed}
-  .hc-list-panel{margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px}
+  .hc-list-panel{background:var(--bg)}
   .hc-list-inner{overflow-x:auto}
-  .hc-list-scroll{max-height:260px;overflow-y:auto}
+  .hc-list-scroll{max-height:none;overflow-y:visible}
   .hc-list-hdr{display:flex;gap:0;padding:6px 10px;background:var(--surface);border-bottom:1px solid var(--border);font-size:.72em;font-weight:600;color:var(--muted);min-width:max-content}
   .hc-list-row{display:flex;align-items:center;gap:0;padding:5px 10px;border-bottom:1px solid var(--border);font-size:.76em;min-width:max-content}
   .hc-list-row:last-child{border-bottom:none}
@@ -127,6 +127,16 @@
   .fetch-hc-btn:hover{background:#388bfd}
   .fetch-hc-btn:disabled{background:#444;cursor:not-allowed}
   .fetch-status{font-size:.78em;margin-top:6px;color:var(--muted)}
+  /* Split layout */
+  .main-split{display:flex;align-items:flex-start;border-top:1px solid var(--border)}
+  .split-left{width:40%;position:sticky;top:0;max-height:100vh;overflow-y:auto;border-right:1px solid var(--border);background:var(--bg);flex-shrink:0}
+  .split-left-hdr{padding:8px 14px;font-size:.78em;font-weight:600;color:var(--muted);background:var(--surface);border-bottom:1px solid var(--border);letter-spacing:.04em;text-transform:uppercase}
+  .split-right{flex:1;min-width:0;display:flex;flex-direction:column}
+  .right-tab-nav{display:flex;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;flex-shrink:0}
+  .right-tab-btn{padding:10px 22px;background:none;border:none;border-bottom:3px solid transparent;color:var(--muted);cursor:pointer;font-size:.85em;font-weight:600;white-space:nowrap;transition:color .15s}
+  .right-tab-btn.active{color:var(--blue);border-bottom-color:var(--blue)}
+  .right-tab-pane{display:none}
+  .right-tab-pane.active{display:block}
   /* Splash loader */
   #splash{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;transition:opacity .4s}
   #splash.hidden{opacity:0;pointer-events:none}
@@ -192,21 +202,37 @@
     <button class="fetch-hc-btn" id="view-recent-btn" onclick="loadHCList()" style="background:#2d333b;border:1px solid var(--border)">&#128203; View Recent</button>
   </div>
   <div class="fetch-status" id="fetch-status"></div>
-  <div class="hc-list-panel" id="hc-list-panel" style="display:none"></div>
 </div>
 
-<div id="hc-preview-section" style="display:none;background:var(--surface);border-bottom:1px solid var(--border)">
-  <div style="padding:0 28px">
-    <div class="alarm-toggle" style="padding:10px 0" onclick="toggleBlock('hc-preview-body',this)">
-      <span>&#9660;</span> &#128196; Raw Health Check Output
+<div class="main-split">
+  <div class="split-left">
+    <div class="split-left-hdr">&#128203; Health Checks</div>
+    <div class="hc-list-panel" id="hc-list-panel">
+      <div style="padding:24px 16px;color:var(--muted);font-size:.85em;text-align:center;line-height:1.6">
+        Enter a site token above<br>and click &#128203; View Recent
+      </div>
     </div>
-    <div id="hc-preview-body">
-      <iframe id="hc-preview-frame" sandbox="allow-scripts" style="width:100%;height:650px;border:1px solid var(--border);border-radius:6px;display:block;margin-bottom:16px;background:#fff"></iframe>
+  </div>
+  <div class="split-right">
+    <div class="right-tab-nav">
+      <button class="right-tab-btn active" onclick="switchRightTab('diag',this)">&#129302; Diagnostics</button>
+      <button class="right-tab-btn" onclick="switchRightTab('hc',this)">&#128196; Health Check Output</button>
+    </div>
+    <div class="right-tab-pane active" id="right-pane-diag">
+      <div class="results" id="results"></div>
+    </div>
+    <div class="right-tab-pane" id="right-pane-hc">
+      <div style="padding:0 28px">
+        <div class="alarm-toggle" style="padding:10px 0" onclick="toggleBlock('hc-preview-body',this)">
+          <span>&#9660;</span> &#128196; Raw Health Check Output
+        </div>
+        <div id="hc-preview-body">
+          <iframe id="hc-preview-frame" sandbox="allow-scripts" style="width:100%;height:calc(100vh - 180px);min-height:500px;border:1px solid var(--border);border-radius:6px;display:block;margin-bottom:16px;background:#fff"></iframe>
+        </div>
+      </div>
     </div>
   </div>
 </div>
-
-<div class="results" id="results"></div>
 
 <script>
 // ============================================================
@@ -1021,6 +1047,18 @@ function toggleBlock(id,toggle){
   el.style.display=open?'':'none';
   toggle.querySelector('span').textContent=open?'&#9660;':'&#9658;';
 }
+function switchRightTab(name,btn){
+  document.querySelectorAll('.right-tab-btn').forEach(function(b){b.classList.remove('active');});
+  document.querySelectorAll('.right-tab-pane').forEach(function(p){p.classList.remove('active');});
+  var pane=document.getElementById('right-pane-'+name);
+  if(pane) pane.classList.add('active');
+  if(btn){btn.classList.add('active');}
+  else{
+    document.querySelectorAll('.right-tab-btn').forEach(function(b){
+      if((b.getAttribute('onclick')||'').indexOf("'"+name+"'")>=0) b.classList.add('active');
+    });
+  }
+}
 
 // ============================================================
 // AI DIAGNOSIS — fetch to Flask /diagnose endpoint (relative path)
@@ -1205,7 +1243,7 @@ function _loadHCHtml(html, requestId){
   hcFiles=[new File([new Blob([html],{type:'text/html'})],fname,{type:'text/html'})];
   document.getElementById('hcLabel').textContent=fname;
   document.getElementById('hc-preview-frame').srcdoc=html;
-  document.getElementById('hc-preview-section').style.display='';
+  switchRightTab('diag');
   processHtmlTexts([html]);
 }
 
@@ -1282,7 +1320,6 @@ function loadHCList(){
   var panel=document.getElementById('hc-list-panel');
   var btn=document.getElementById('view-recent-btn');
   btn.disabled=true;
-  panel.style.display='';
   panel.innerHTML='<div class="hc-list-hdr">Loading recent health checks...</div>';
 
   var now=new Date();
@@ -1519,7 +1556,8 @@ function renderAll(cards){
     _cardData[i]=_cardData[cards.indexOf(c)]||_cardData[i];
     return renderCard(c.vendor,c.siteId,c.hc,c.findings,c.swRows,i);
   }).join('');
-  if(_pst) _setFetchStatus(_pst,'✅ '+valid.length+' site'+(valid.length>1?'s':'')+' parsed — scroll down for results.','var(--green)');
+  switchRightTab('diag');
+  if(_pst) _setFetchStatus(_pst,'✅ '+valid.length+' site'+(valid.length>1?'s':'')+' parsed — results ready.','var(--green)');
 }
 
 // Auto-fill from URL params — pre-fill fields and show recent HCs; never auto-start a new health check
