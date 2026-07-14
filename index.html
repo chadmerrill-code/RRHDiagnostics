@@ -104,13 +104,17 @@
   .download-btn{padding:9px 20px;background:#1f6feb;border:none;border-radius:6px;color:#fff;font-size:.85em;font-weight:600;cursor:pointer;transition:background .2s}
   .download-btn:hover{background:#388bfd}
   .download-btn:disabled{background:#555;cursor:not-allowed}
-  .hc-list-panel{margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;overflow:hidden}
+  .hc-list-panel{margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px}
+  .hc-list-inner{overflow-x:auto}
   .hc-list-scroll{max-height:260px;overflow-y:auto}
-  .hc-list-hdr{display:flex;gap:8px;padding:6px 12px;background:var(--surface);border-bottom:1px solid var(--border);font-size:.73em;font-weight:600;color:var(--muted)}
-  .hc-list-row{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:.78em}
+  .hc-list-hdr{display:flex;gap:0;padding:6px 10px;background:var(--surface);border-bottom:1px solid var(--border);font-size:.72em;font-weight:600;color:var(--muted);min-width:max-content}
+  .hc-list-row{display:flex;align-items:center;gap:0;padding:5px 10px;border-bottom:1px solid var(--border);font-size:.76em;min-width:max-content}
   .hc-list-row:last-child{border-bottom:none}
   .hc-list-row:hover{background:rgba(255,255,255,.03)}
-  .hc-s-done{color:var(--green)} .hc-s-pend{color:var(--orange)} .hc-s-fail{color:var(--red)}
+  .hc-status-badge{padding:2px 8px;border-radius:3px;font-weight:600;font-size:.9em;display:inline-block}
+  .hc-status-badge.hc-s-done{background:#1a4731;color:var(--green)}
+  .hc-status-badge.hc-s-pend{background:#2a1a00;color:var(--orange)}
+  .hc-status-badge.hc-s-fail{background:#2a0e0e;color:var(--red)}
   .load-hc-btn{padding:3px 10px;background:#1f6feb;border:none;border-radius:4px;color:#fff;font-size:.75em;cursor:pointer;flex-shrink:0}
   .load-hc-btn:hover{background:#388bfd}
   .api-fetch-area{padding:12px 28px;background:#0f1923;border-bottom:1px solid var(--border)}
@@ -1089,14 +1093,31 @@ function _hcField(item){
   return '';
 }
 
+function _hcEnodebs(item){
+  var candidates=['enodeb_id','enodeb_ids','enodebs','eNodeBId','eNodeBIds','enodeb','node_id','node_ids'];
+  for(var i=0;i<candidates.length;i++){
+    var v=item[candidates[i]];
+    if(v==null) continue;
+    if(Array.isArray(v)) return v.join(', ');
+    if(typeof v==='string'&&v) return v;
+  }
+  return '—';
+}
+
+function _fmtIopDate(val){
+  if(!val||val==='-'||val==='null'||val==='undefined') return '-';
+  var d=new Date(val);
+  if(isNaN(d.getTime())) return String(val).slice(0,16).replace('T',' ')||'-';
+  var h=d.getHours(),m=String(d.getMinutes()).padStart(2,'0');
+  return (d.getMonth()+1)+'/'+d.getDate()+'/'+d.getFullYear()+' '+(h%12||12)+':'+m+' '+(h<12?'am':'pm');
+}
+
 function renderHCList(data,panel,start,end){
-  // Try known wrapper keys, then any array value in the object, then bare array
   var items=null;
   var wrappers=['enodeb_healthcheck','enodeb_healthcheck_list','enodeb_healthchecks','healthcheck_list','data','results','healthchecks','list','items','records'];
   for(var i=0;i<wrappers.length;i++){if(Array.isArray(data[wrappers[i]])){items=data[wrappers[i]];break;}}
   if(!items&&Array.isArray(data)) items=data;
   if(!items){
-    // last resort: find any non-empty array in the response
     var keys=Object.keys(data||{});
     for(var j=0;j<keys.length;j++){if(Array.isArray(data[keys[j]])&&data[keys[j]].length){items=data[keys[j]];break;}}
   }
@@ -1105,28 +1126,46 @@ function renderHCList(data,panel,start,end){
     panel.innerHTML='<div class="hc-list-hdr">No health checks found ('+(start||'?')+' – '+(end||'?')+') &mdash; response keys: '+escHtml(dbgKeys)+'</div>';
     return;
   }
+  var S='flex-shrink:0;padding-right:10px;';
+  function col(w,txt,extra){return '<span style="min-width:'+w+'px;'+S+(extra||'')+'">'+txt+'</span>';}
   var rows=items.map(function(item){
     var rid=_hcField(item,'request_id','requestId','id');
-    var status=_hcField(item,'status','statusText');
     var rtype=_hcField(item,'req_type','reqType','type','request_type')||'On-Demand';
+    var status=_hcField(item,'status','statusText');
+    var enodebs=_hcEnodebs(item);
+    var ip=_hcField(item,'ip_address','ip','ipAddress')||'—';
+    var email=_hcField(item,'email_id','email','emailId','email_address')||'—';
     var by=_hcField(item,'created_by','createdBy','user','eid','created_user');
-    var date=_hcField(item,'created_on','createdOn','created_at','createdAt','ondemandcheck_start_time','start_date','startDate','date','timestamp','created_date','request_date');
-    var disp=date.slice(0,16).replace('T',' ')||'—';
+    var createdOn=_fmtIopDate(_hcField(item,'created_on','createdOn','created_at','createdAt','ondemandcheck_start_time','start_date','startDate','date','timestamp','created_date','request_date'));
+    var scheduled=_fmtIopDate(_hcField(item,'scheduled_time','scheduledTime','schedule_time'));
+    var execTime=_fmtIopDate(_hcField(item,'execution_time','executionTime','completed_on','completedOn','ondemandcheck_end_time','end_time','endTime','end_date','endDate'));
     var sCls=/complet/i.test(status)?'hc-s-done':/fail|error/i.test(status)?'hc-s-fail':'hc-s-pend';
     var canLoad=/complet/i.test(status);
     return '<div class="hc-list-row">'+
-      '<span style="flex:1.5;min-width:110px">'+escHtml(disp)+'</span>'+
-      '<span style="flex:1;min-width:80px">'+escHtml(rtype)+'</span>'+
-      '<span class="'+sCls+'" style="flex:1;min-width:70px">'+escHtml(status)+'</span>'+
-      '<span style="flex:1;min-width:70px;color:var(--muted)">'+escHtml(by)+'</span>'+
-      '<span style="min-width:55px;color:var(--muted);font-family:monospace;font-size:.72em">'+escHtml(rid.slice(-8))+'</span>'+
-      (canLoad?'<button class="load-hc-btn" onclick="loadExistingHC(\''+rid.replace(/'/g,"\\'")+'\')" title="'+escHtml(rid)+'">Load</button>':'<span style="color:var(--muted);font-size:.75em;min-width:44px">'+escHtml(status)+'</span>')+
+      col(80,escHtml(rid),'font-family:monospace;font-size:.9em')+
+      col(90,escHtml(rtype))+
+      col(105,'<span class="hc-status-badge '+sCls+'">'+escHtml(status)+'</span>')+
+      col(130,escHtml(enodebs),'flex:1;min-width:130px')+
+      col(105,escHtml(ip))+
+      col(130,escHtml(email))+
+      col(120,escHtml(by))+
+      col(150,escHtml(createdOn))+
+      col(135,escHtml(scheduled||'-'))+
+      col(150,escHtml(execTime||'-'))+
+      (canLoad?'<button class="load-hc-btn" onclick="loadExistingHC(\''+rid.replace(/'/g,"\\'")+'\')">Load</button>':
+               '<span style="color:var(--muted);font-size:.75em;min-width:44px">'+escHtml(status)+'</span>')+
     '</div>';
   }).join('');
-  panel.innerHTML='<div class="hc-list-hdr">'+
-    '<span style="flex:1.5">Date/Time</span><span style="flex:1">Type</span><span style="flex:1">Status</span><span style="flex:1">Created By</span><span style="min-width:55px">ID</span><span>Action</span>'+
-  '</div>'+
-  '<div class="hc-list-scroll">'+rows+'</div>';
+  panel.innerHTML='<div class="hc-list-inner">'+
+    '<div class="hc-list-hdr">'+
+      col(80,'Callout Zone')+col(90,'Type')+col(105,'Status')+
+      col(130,'eNodeB#','flex:1;min-width:130px')+
+      col(105,'IP Address')+col(130,'Email Id')+col(120,'Created By')+
+      col(150,'Created On')+col(135,'Scheduled Time')+col(150,'Execution Time')+
+      '<span>Action</span>'+
+    '</div>'+
+    '<div class="hc-list-scroll">'+rows+'</div>'+
+  '</div>';
 }
 
 function loadExistingHC(requestId){
