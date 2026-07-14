@@ -332,6 +332,8 @@ function parseXLSX(file,callback){
 function detectVendor(t){
   if(/data-section=['"]cpri['"]/.test(t)||/data-section=['"]vswr['"]/.test(t)) return 'Samsung';
   if(/data-section=['"]active-alarms['"]/.test(t)||/data-section=['"]light-level['"]/.test(t)) return 'Ericsson';
+  // IOP AMOS plain-text format
+  if(/#{4,}\s*ALARMS\s*#{4,}/.test(t)||/Health Check Timestamp/i.test(t)||/LIGHT LEVEL INFO/i.test(t)) return 'IOP-Ericsson';
   return 'Unknown';
 }
 
@@ -374,6 +376,207 @@ function parseEricsson(htmlText){
     if(m) siteId=m[1];
   });
   sections['_site_id']=siteId;
+  return sections;
+}
+
+// ============================================================
+// IOP ERICSSON (AMOS plain-text) PARSER
+// ============================================================
+function parseIOPEricsson(htmlText){
+  // Strip HTML tags — IOP wraps AMOS output in <pre> or similar
+  var text=htmlText.replace(/<[^>]+>/g,' ').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ');
+  var sections={};
+  sections['_vendor']='Ericsson';
+
+  // ── Site ID ────────────────────────────────────────────────
+  // Title line like "1687025_4G5G_JASPER_WEST_AL" or "168025_4G_SITE_NAME"
+  var siteM=text.match(/\b(\d{6,7})_[A-Z0-9_]+/);
+  sections['_site_id']=siteM?siteM[1]:null;
+
+  // ── Active Alarms ──────────────────────────────────────────
+  // Section header: #### ALARMS ####
+  // Row format: YYYY-MM-DD HH:MM:SS  [c|m|w|cj|mj]  AlarmName  MO=value (Extra)
+  var alarms=[];
+  var alarmBlock=text.match(/#{2,}\s*ALARMS\s*#{2,}([\s\S]*?)(?=#{2,}[A-Z]|$)/i);
+  if(alarmBlock){
+    var alarmLines=alarmBlock[1].split('\n');
+    alarmLines.forEach(function(line){
+      // timestamp + severity + alarm name + MO
+      var m=line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(c|m|w|cj|mj)\s+(\S+)\s+(.*)/i);
+      if(m){
+        var sev=m[2].toLowerCase();
+        var sevLabel=sev==='c'||sev==='cj'?'Critical':'Major';
+        alarms.push({
+          identifier: (m[4].match(/\S+/))[0]||'',
+          text: line.trim(),
+          _severity: sevLabel,
+          _alarm_name: m[3],
+          _mo: m[4].trim(),
+          _timestamp: m[1]
+        });
+      }
+    });
+  }
+  // Total alarms summary: ">>> Total: N Alarms (X Critical, Y Major)"
+  var totM=text.match(/Total:\s*(\d+)\s*Alarms?\s*\((\d+)\s*Critical.*?(\d+)\s*Major/i);
+  sections['_alarm_summary']=totM?{total:+totM[1],critical:+totM[2],major:+totM[3]}:null;
+  sections['active-alarms']=alarms;
+
+  // ── Cell Status ────────────────────────────────────────────
+  // "st NbIotCell" / "st NRCellDU" / "st EUtranCellFDD" / "st EUtranCellTDD"
+  // Output: pipe-separated table, Adm col has "1 (UNLOCKED)"/"0 (LOCKED)", Oper has "1 (ENABLED)"/"0 (DISABLED)"
+  var cells=[];
+  var cellRx=/(NbIotCell|NRCellDU|EUtranCellFDD|EUtranCellTDD|EUtranCellTDD)[\s\S]*?(?=st \w|#{2,}|$)/gi;
+  var cellSection=text.match(/st\s+(?:NbIotCell|NRCellDU|EUtranCellFDD|EUtranCellTDD)([\s\S]*?)(?=\n(?:st |#{2,}[A-Z]|>>>))/i);
+  if(cellSection){
+    var cLines=cellSection[0].split('\n');
+    var headers=null;
+    cLines.forEach(function(line){
+      if(!headers&&/\|\s*MO\s*\|/.test(line)){
+        headers=line.split('|').map(function(h){return h.trim();});
+        return;
+      }
+      if(headers&&/\|/.test(line)&&!/^[\-\|=\s]+$/.test(line)){
+        var cols=line.split('|').map(function(c){return c.trim();});
+        if(cols.length<3) return;
+        var obj={};
+        headers.forEach(function(h,i){obj[h]=cols[i]||'';});
+        var moName=obj['MO']||cols[cols.length-1]||line.trim();
+        var admState=obj['Adm']||obj['AdmState']||'';
+        var operState=obj['Oper']||obj['OperState']||'';
+        cells.push({
+          identifier: moName,
+          text: line.trim(),
+          _adm: admState,
+          _oper: operState
+        });
+      }
+    });
+  }
+  // Fallback: scan for cell MO lines directly
+  if(!cells.length){
+    var cellMoRx=/\b(EUtranCellFDD|EUtranCellTDD|NRCellDU|NbIotCell)=(\S+)\s+(.*)/g;
+    var cm;
+    while((cm=cellMoRx.exec(text))!==null){
+      cells.push({identifier:cm[1]+'='+cm[2],text:cm[0].trim(),_adm:'',_oper:cm[3]});
+    }
+  }
+  sections['cell-status']=cells;
+
+  // ── Radio / FRU Hardware ───────────────────────────────────
+  // Semicolon-separated: FRU;LNH;BOARD;ST;FAULT;OPER;MAINT;STAT;PRODUCTNUMBER;REV;SERIAL;DATE
+  var radios=[];
+  var fruLines=text.match(/(?:FRU|FieldReplaceableUnit)[^\n]*;[^\n]+/g)||[];
+  // Also look for the FRU table header
+  var fruBlock=text.match(/FRU\s*;?\s*LNH\s*;?\s*BOARD([\s\S]*?)(?=#{2,}[A-Z]|>>>|$)/i);
+  if(fruBlock){
+    var fruRows=fruBlock[1].trim().split('\n');
+    fruRows.forEach(function(row){
+      if(!row.trim()||/^[\-=\s]+$/.test(row)) return;
+      var parts=row.split(';').map(function(p){return p.trim();});
+      if(parts.length>=6){
+        var oper=parts[5]||'';
+        radios.push({
+          identifier:parts[0]||'',
+          text:row.trim(),
+          _oper:oper,
+          _fault:parts[4]||'',
+          _pn:parts[8]||'',
+          _serial:parts[10]||''
+        });
+      }
+    });
+  }
+  sections['radio']=radios;
+
+  // ── RiLink / Light Level ───────────────────────────────────
+  // Section: #### LIGHT LEVEL INFO ####
+  // Summary table: ID  RiL  Type  Res  MO1-MO2 ... Issue
+  // Res column is "OK" or "NOK"
+  var lightLinks=[];
+  var llBlock=text.match(/LIGHT LEVEL INFO([\s\S]*?)(?=#{2,}[A-Z]|$)/i);
+  if(llBlock){
+    var llLines=llBlock[1].split('\n');
+    llLines.forEach(function(line){
+      // Look for OK or NOK entries in the summary table
+      var okM=line.match(/\b(OK|NOK)\b/);
+      var idM=line.match(/RiLink[_=\-]?(\w+)|ID[:\s]+(\w+)/i);
+      if(okM){
+        lightLinks.push({
+          identifier: idM?(idM[1]||idM[2]):'',
+          text: line.trim(),
+          _result: okM[1]
+        });
+      }
+    });
+    // Also scan ASCII diagram lines: OK[Xm-Ym] or NOK
+    var diagRx=/(\w+[_\-]\w+|RiLink\S*)\s+\|\s+(OK|NOK)/gi;
+    var dm;
+    while((dm=diagRx.exec(llBlock[1]))!==null){
+      lightLinks.push({identifier:dm[1],text:dm[0].trim(),_result:dm[2]});
+    }
+  }
+  sections['light-level']=lightLinks;
+
+  // ── VSWR ──────────────────────────────────────────────────
+  // Section: #### VSWR INFO ####
+  var vswr=[];
+  var vswrBlock=text.match(/VSWR INFO([\s\S]*?)(?=#{2,}[A-Z]|$)/i);
+  if(vswrBlock){
+    var vswrLines=vswrBlock[1].split('\n');
+    vswrLines.forEach(function(line){
+      var m=line.match(/(FieldReplaceableUnit[=\-]\S+[,\s]+RfPort[=\-]\S+)\s+([\d.]+)/);
+      if(m) vswr.push({identifier:m[1],returnLoss:+m[2],text:line.trim()});
+    });
+  }
+  sections['vswr']=vswr;
+
+  // ── PIM / Noise ────────────────────────────────────────────
+  // Section: #### 4G PIM/NOISE INFO #### or #### 5G PIM/NOISE INFO ####
+  // mfirt output: CELL SC FRU BOARD A B C D E F G H DELTA
+  var pimTable=[];
+  var pimBlock=text.match(/PIM\/NOISE INFO([\s\S]*?)(?=#{2,}[A-Z]|$)/i);
+  if(pimBlock){
+    var pimLines=pimBlock[1].split('\n');
+    var pimHdr=null;
+    pimLines.forEach(function(line){
+      if(!pimHdr&&/\bCELL\b.*\bSC\b.*\bFRU\b/i.test(line)){
+        pimHdr=line.trim().split(/\s+/);return;
+      }
+      if(pimHdr&&line.trim()&&!/^[\-=\s]+$/.test(line)){
+        var cols=line.trim().split(/\s+/);
+        if(cols.length>=4){
+          var row={};
+          pimHdr.forEach(function(h,i){row[h]=cols[i]||'';});
+          // Compute max branch value as PIM dB proxy
+          var branchVals=['A','B','C','D','E','F','G','H'].map(function(b){return parseFloat(row[b]||'NaN');}).filter(function(v){return !isNaN(v);});
+          row['PIM dB']=branchVals.length?String(Math.max.apply(null,branchVals)):'';
+          pimTable.push(row);
+        }
+      }
+    });
+  }
+  sections['pim-table']=pimTable;
+
+  // ── Optical / SFP ──────────────────────────────────────────
+  // ID;LINK;RiL;WL1;TEMP1;TXbs1;TXdBm1;RXdBm1;BER1;...
+  var optical=[];
+  var optBlock=text.match(/ID\s*;\s*LINK\s*;\s*RiL([\s\S]*?)(?=#{2,}[A-Z]|$)/i);
+  if(optBlock){
+    var optLines=optBlock[1].split('\n');
+    var optHdr=['ID','LINK','RiL','WL','TEMP','TXbs','TXdBm','RXdBm','BER'];
+    optLines.forEach(function(line){
+      if(!line.trim()||/^[\-=\s;]+$/.test(line)) return;
+      var parts=line.split(';').map(function(p){return p.trim();});
+      if(parts.length>=6&&!isNaN(parts[0])){ // first col is numeric ID
+        var row={};
+        optHdr.forEach(function(h,i){row[h]=parts[i]||'';});
+        optical.push(row);
+      }
+    });
+  }
+  sections['optical']=optical;
+
   return sections;
 }
 
@@ -454,13 +657,15 @@ function classifyEricsson(hc){
   var radios=hc['radio']||[];
   var light=hc['light-level']||[];
   var pimTable=hc['pim-table']||[];
-  var alarmText=alarms.map(function(a){return a.text}).join(' ');
+  // Build alarm text from both raw text and IOP-parsed alarm name field
+  var alarmText=alarms.map(function(a){return (a._alarm_name||'')+' '+a.text;}).join(' ');
   var aScore=_AP.filter(function(p){return p.test(alarmText)}).length;
   var bScore=_BP.filter(function(p){return p.test(alarmText)}).length;
   var hasHardFault=_HP.some(function(p){return p.test(alarmText)});
-  var nokLinks=light.filter(function(li){return /NOK|Link Disabled/i.test(li.text)});
-  var disabledCells=cells.filter(function(c){return c.text.indexOf('0 (DISABLED)')>=0});
-  var disabledRadios=radios.filter(function(r){return r.text.indexOf('0 (DISABLED)')>=0});
+  var nokLinks=light.filter(function(li){return /NOK|Link Disabled/i.test(li._result||li.text)});
+  // IOP AMOS: disabled cells have "0 (DISABLED)" in text or _oper field
+  var disabledCells=cells.filter(function(c){return /0\s*\(DISABLED\)/i.test(c._oper||c.text)||/LOCKED/i.test(c._adm||'');});
+  var disabledRadios=radios.filter(function(r){return /0\s*\(DISABLED\)|DISABLED/i.test(r._oper||r.text);});
   var hwDetails=[];
   alarms.forEach(function(a){
     var pn=a.text.match(/"PN"\s*:\s*"([^"]+)"/);
@@ -691,7 +896,9 @@ function renderCard(vendor,siteId,hc,findings,swRows,idx){
     });
   }else{
     alarmList=(hc['active-alarms']||[]).map(function(a){
-      return '<li class="'+(/  M /.test(a.text)?'alarm-major':'alarm-minor')+'"><span class="alarm-dot">&#9679;</span><span>'+escHtml(a.text)+'</span></li>';
+      var isMajor=a._severity==='Critical'||/\bc\b|\bcj\b/.test(a.text.split(' ')[1]||'')||/  M /.test(a.text);
+      var label=a._alarm_name?'['+escHtml(a._severity||'?')+'] '+escHtml(a._alarm_name)+' — '+escHtml(a._mo||''):escHtml(a.text);
+      return '<li class="'+(isMajor?'alarm-major':'alarm-minor')+'"><span class="alarm-dot">&#9679;</span><span>'+label+'</span></li>';
     });
   }
   var alarmHtml=alarmList.length?'<ul class="alarm-list scroll-list">'+alarmList.join('')+'</ul>'
@@ -828,7 +1035,21 @@ function runDiag(idx){
 
   document.getElementById('run-btn-'+idx).disabled=true;
   document.getElementById('spinner-'+idx).classList.add('active');
+  document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> 🧠 Building diagnostic prompt from parsed data...';
   document.getElementById('ai-result-'+idx).innerHTML='';
+
+  setTimeout(function(){
+    if(document.getElementById('spinner-'+idx).classList.contains('active'))
+      document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> 📡 Firing prompt at the Verizon LLM Gateway... hope it\'s awake.';
+  },1200);
+  setTimeout(function(){
+    if(document.getElementById('spinner-'+idx).classList.contains('active'))
+      document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> ✍️ LLM is writing your troubleshooting guide... probably in cursive.';
+  },4000);
+  setTimeout(function(){
+    if(document.getElementById('spinner-'+idx).classList.contains('active'))
+      document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> 🤖 Still generating... the AI is being thorough. Suspiciously thorough.';
+  },10000);
 
   fetch('diagnose',{
     method:'POST',
@@ -838,6 +1059,7 @@ function runDiag(idx){
   .then(function(r){return r.json();})
   .then(function(resp){
     document.getElementById('spinner-'+idx).classList.remove('active');
+    document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Analyzing...';
     document.getElementById('run-btn-'+idx).disabled=false;
     if(!resp.success){
       document.getElementById('ai-result-'+idx).innerHTML=
@@ -848,6 +1070,7 @@ function runDiag(idx){
   })
   .catch(function(err){
     document.getElementById('spinner-'+idx).classList.remove('active');
+    document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Analyzing...';
     document.getElementById('run-btn-'+idx).disabled=false;
     document.getElementById('ai-result-'+idx).innerHTML=
       '<p style="color:var(--red);margin-top:12px">&#9888; Request failed: '+escHtml(err.message||err)+'</p>';
@@ -1038,7 +1261,6 @@ async function fetchFromApi(){
         await new Promise(function(r){setTimeout(r,300);});
         _setFetchStatus(st,'🔬 Step 4/4 — Parsing health check and running diagnostics...','var(--blue)');
         _loadHCHtml(j3.html,reqId);
-        _setFetchStatus(st,'✅ Done! Request #'+reqId+' — scroll down for results.','var(--green)');
         return;
       }
     }
@@ -1188,7 +1410,7 @@ function loadExistingHC(requestId){
       statusEl.textContent='Error: '+resp.error;
       return;
     }
-    _setFetchStatus(statusEl,'✅ Loaded request #'+resp.request_id+' — running diagnostics...','var(--green)');
+    _setFetchStatus(statusEl,'⌛ Loaded #'+resp.request_id+' — parsing...','var(--muted)');
     _loadHCHtml(resp.html, resp.request_id);
   })
   .catch(function(err){
@@ -1201,9 +1423,11 @@ function loadExistingHC(requestId){
 function processHtmlTexts(htmlTexts){
   if(!htmlTexts.length) return;
   _cardData={};
-  document.getElementById('results').innerHTML='<div class="spinner active"><span class="spin-icon">&#8987;</span> Parsing health check data...</div>';
+  var _pst=document.getElementById('fetch-status');
+  document.getElementById('results').innerHTML='';
   new Promise(function(resolve){
     if(!swFile){resolve([]);return;}
+    if(_pst) _setFetchStatus(_pst,'📊 Loading switch alarm data...','var(--muted)');
     parseXLSX(swFile,function(data){resolve(data);});
   }).then(function(swData){
     var total=htmlTexts.length;
@@ -1212,15 +1436,20 @@ function processHtmlTexts(htmlTexts){
     function onDone(){if(--pending===0) renderAll(cards);}
     htmlTexts.forEach(function(htmlText,idx){
       try{
+        if(_pst) _setFetchStatus(_pst,'🔍 Step 1 — Detecting vendor...','var(--muted)');
         var vendor=detectVendor(htmlText);
-        var hc=vendor==='Samsung'?parseSamsung(htmlText):parseEricsson(htmlText);
+        if(_pst) _setFetchStatus(_pst,'🔬 Step 2 — '+(vendor==='Unknown'?'Parsing (IOP format detected)...':'Parsing '+vendor+' health check...'),'var(--muted)');
+        var hc=vendor==='Samsung'?parseSamsung(htmlText):(vendor==='Ericsson'?parseEricsson(htmlText):parseIOPEricsson(htmlText));
         var siteId=hc['_site_id']||'UNKNOWN';
+        if(_pst) _setFetchStatus(_pst,'🧠 Step 3 — Classifying fault archetype for site '+siteId+'...','var(--muted)');
+        var resolvedVendor=hc['_vendor']||vendor;
         var filtered=filterAlarms(swData,siteId);
-        var findings=vendor==='Samsung'?classifySamsung(hc):classifyEricsson(hc);
-        _cardData[idx]={vendor,siteId,findings,swRows:filtered};
-        cards[idx]={vendor,siteId,hc,findings,swRows:filtered};
+        var findings=resolvedVendor==='Samsung'?classifySamsung(hc):classifyEricsson(hc);
+        _cardData[idx]={vendor:resolvedVendor,siteId,findings,swRows:filtered};
+        cards[idx]={vendor:resolvedVendor,siteId,hc,findings,swRows:filtered};
       }catch(err){
         console.error('Parse error from API fetch: '+err);
+        if(_pst) _setFetchStatus(_pst,'❌ Parse error: '+(err.message||err),'var(--red)');
       }
       onDone();
     });
@@ -1233,7 +1462,9 @@ function processHtmlTexts(htmlTexts){
 function processAll(){
   if(!hcFiles.length) return;
   _cardData = {};
-  document.getElementById('results').innerHTML='<div class="spinner active"><span class="spin-icon">&#8987;</span> Parsing health check files...</div>';
+  var _pst=document.getElementById('fetch-status');
+  if(_pst) _setFetchStatus(_pst,'⌛ Parsing '+(hcFiles.length>1?hcFiles.length+' files':'health check')+'...','var(--muted)');
+  document.getElementById('results').innerHTML='';
   new Promise(function(resolve){
     if(!swFile){resolve([]);return;}
     parseXLSX(swFile,function(data){resolve(data);});
@@ -1257,12 +1488,13 @@ function processAll(){
         try{
           var htmlText=e.target.result;
           var vendor=detectVendor(htmlText);
-          var hc=vendor==='Samsung'?parseSamsung(htmlText):parseEricsson(htmlText);
+          var hc=vendor==='Samsung'?parseSamsung(htmlText):(vendor==='Ericsson'?parseEricsson(htmlText):parseIOPEricsson(htmlText));
           var siteId=hc['_site_id']||'UNKNOWN';
+          var resolvedVendor=hc['_vendor']||vendor;
           var filtered=filterAlarms(swData,siteId);
-          var findings=vendor==='Samsung'?classifySamsung(hc):classifyEricsson(hc);
-          _cardData[idx]={vendor,siteId,findings,swRows:filtered};
-          cards[idx]={vendor,siteId,hc,findings,swRows:filtered};
+          var findings=resolvedVendor==='Samsung'?classifySamsung(hc):classifyEricsson(hc);
+          _cardData[idx]={vendor:resolvedVendor,siteId,findings,swRows:filtered};
+          cards[idx]={vendor:resolvedVendor,siteId,hc,findings,swRows:filtered};
         }catch(err){
           console.error('Parse error on '+file.name+': '+err);
           // leave cards[idx] as null — renderAll will skip it
@@ -1276,14 +1508,18 @@ function processAll(){
 
 function renderAll(cards){
   var el=document.getElementById('results');
+  var _pst=document.getElementById('fetch-status');
   var valid=cards.filter(function(c){return c!==null;});
-  if(!valid.length){el.innerHTML='<p style="color:var(--muted);padding:20px">No valid health check files could be parsed.</p>';return;}
-  // re-index so card idx matches _cardData key
+  if(!valid.length){
+    el.innerHTML='<p style="color:var(--muted);padding:20px">No valid health check files could be parsed.</p>';
+    if(_pst) _setFetchStatus(_pst,'⚠️ No valid data found in health check.','var(--orange)');
+    return;
+  }
   el.innerHTML=valid.map(function(c,i){
-    // remap _cardData to new sequential indices
     _cardData[i]=_cardData[cards.indexOf(c)]||_cardData[i];
     return renderCard(c.vendor,c.siteId,c.hc,c.findings,c.swRows,i);
   }).join('');
+  if(_pst) _setFetchStatus(_pst,'✅ '+valid.length+' site'+(valid.length>1?'s':'')+' parsed — scroll down for results.','var(--green)');
 }
 
 // Auto-fill from URL params — pre-fill fields and show recent HCs; never auto-start a new health check
