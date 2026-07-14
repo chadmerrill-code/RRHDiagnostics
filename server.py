@@ -206,36 +206,33 @@ def fetch_healthcheck():
     except Exception as e:
         return jsonify({"success": False, "error": f"Health check POST error: {e}"}), 502
 
-    # Handle response — may be HTML directly or JSON with request IDs to poll
-    content_type = r.headers.get("content-type", "")
-    if "html" in content_type:
+    resp_data = r.json() if "html" not in r.headers.get("content-type", "") else {}
+
+    if "html" in r.headers.get("content-type", ""):
         return jsonify({"success": True, "html": r.text, "request_id": site_token})
 
-    resp_data = r.json()
-
-    # If HTML is embedded in the JSON response
-    hc_html = resp_data.get("enodeb_healthcheck_result", "")
-    if hc_html and hc_html != "No HCs found":
-        if not isinstance(hc_html, str):
-            import json as _json
-            hc_html = _json.dumps(hc_html)
-        return jsonify({"success": True, "html": hc_html, "request_id": site_token})
-
-    # If we got a request ID back, poll for the result
-    request_ids = (
-        resp_data.get("requestIds")
-        or resp_data.get("request_ids")
-        or ([resp_data["requestId"]] if resp_data.get("requestId") else [])
-        or ([resp_data["request_id"]] if resp_data.get("request_id") else [])
+    # Extract request_id from POST response to begin polling
+    unwrapped = resp_data.get("data") or resp_data
+    hc_meta = unwrapped.get("enodeb_healthcheck_result") or {}
+    request_id = (
+        hc_meta.get("request_id")
+        or unwrapped.get("requestId")
+        or unwrapped.get("request_id")
+        or unwrapped.get("id")
+        or unwrapped.get("healthcheckId")
     )
-    if not request_ids:
+    if not request_id and isinstance(unwrapped.get("requestIds"), list):
+        request_id = unwrapped["requestIds"][0]
+
+    if not request_id:
         return jsonify({
             "success": False,
-            "error": f"Unexpected IOP response: {str(resp_data)[:300]}",
+            "error": f"Could not extract request ID from IOP response. Raw response: {str(resp_data)[:500]}",
         }), 502
 
-    request_id = request_ids[0]
+    request_id = str(request_id)
     poll_url = f"{IOP_BASE}/neops/enodeb/healthcheck/request/{request_id}"
+
     for attempt in range(31):
         if attempt > 0:
             time.sleep(10)
@@ -251,12 +248,22 @@ def fetch_healthcheck():
             if rp.status_code != 200:
                 continue
             result = rp.json()
-            hc_html = result.get("enodeb_healthcheck_result", "")
-            if not isinstance(hc_html, str):
-                import json as _json
-                hc_html = _json.dumps(hc_html)
-            if hc_html and hc_html != "No HCs found":
-                return jsonify({"success": True, "html": hc_html, "request_id": str(request_id)})
+            hc_data = result.get("enodeb_healthcheck_result", {})
+            if not isinstance(hc_data, dict):
+                continue
+            if hc_data.get("status") != "Completed":
+                continue
+            # HTML lives at ondemand_info/precheck_info/postcheck_info → result[0].output[0]
+            hc_html = ""
+            for info_key in ("ondemand_info", "precheck_info", "postcheck_info"):
+                outputs = (hc_data.get(info_key) or {}).get("result") or []
+                if outputs:
+                    out = (outputs[0].get("output") or [])
+                    if out and out[0]:
+                        hc_html = out[0]
+                        break
+            if hc_html:
+                return jsonify({"success": True, "html": hc_html, "request_id": request_id})
         except Exception:
             continue
 
