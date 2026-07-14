@@ -127,34 +127,114 @@ IOP_HEADERS = {
 def fetch_healthcheck():
     body = request.get_json(force=True, silent=True) or {}
     site_token = (body.get("site_token") or "").strip()
-    eid = (body.get("eid") or "").strip()
+    eid = (body.get("eid") or "").strip().upper()
 
     if not site_token:
         return jsonify({"success": False, "error": "site_token is required"}), 400
 
-    # Step 1: initiate health check
-    create_url = f"{IOP_BASE}/site/{site_token}/vwrscreatehealthcheck"
+    base_url = f"{IOP_BASE}/neops/{site_token}"
+
+    # Step 1: get node details to resolve eNodeB IDs
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = httpx.get(
+                f"{base_url}/node/details",
+                headers={k: v for k, v in IOP_HEADERS.items() if k != "Content-Type"},
+                timeout=30,
+                verify=False,
+            )
+        if r.status_code != 200:
+            return jsonify({"success": False, "error": f"IOP node details failed: HTTP {r.status_code}"}), 502
+        node_data = r.json()
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Node details error: {e}"}), 502
+
+    # Extract eNodeB IDs — try common field names
+    enodeb_ids = (
+        node_data.get("enodeb_ids")
+        or node_data.get("enodebIds")
+        or [str(e.get("id") or e.get("enodebId") or e.get("enodeb_id") or "")
+            for e in (node_data.get("enodebs") or node_data.get("eNodeBs") or []) if e]
+    )
+    enodeb_ids = [str(i) for i in enodeb_ids if i]
+
+    if not enodeb_ids:
+        return jsonify({
+            "success": False,
+            "error": f"Could not find eNodeB IDs in node details. Keys returned: {list(node_data.keys())}",
+        }), 502
+
+    # Step 2: POST health check with correct IOP payload
+    hc_url = f"{base_url}/enodeb/healthcheck"
+    payload = {
+        "enodeb_healthcheck": {
+            "enodeb_ids": enodeb_ids,
+            "req_type": "On-Demand",
+            "email_ids": [],
+            "precheck_start_time": "",
+            "postcheck_start_time": "",
+            "ondemandcheck_start_time": "",
+            "include_pre_check_time": "no",
+            "include_post_check_time": "no",
+            "include_ondemand_check_time": "no",
+            "include_prb_heat_map": "no",
+            "timezone": "eastern",
+            "command_list": "regular",
+            "command_list_5g": "fast_5g",
+            "attachments": [],
+            "vendor": "ENM",
+            "source": "SITES",
+            "isTargeted": False,
+            "targeted_hc_options": [],
+            "ip_address": None,
+            "created_by": eid or OAP_USER_EID,
+        }
+    }
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = httpx.post(
-                create_url,
-                json={"workType": "Antenna / Tower", "createdBy": eid},
+                hc_url,
+                json=payload,
                 headers=IOP_HEADERS,
                 timeout=60,
                 verify=False,
             )
-        if r.status_code != 200:
-            return jsonify({"success": False, "error": f"IOP create failed: HTTP {r.status_code}"}), 502
-        data = r.json()
-        request_ids = data.get("requestIds", [])
-        if not request_ids:
-            return jsonify({"success": False, "error": "IOP returned no request IDs"}), 502
-        request_id = request_ids[0]
+        if r.status_code not in (200, 201, 202):
+            return jsonify({"success": False, "error": f"IOP health check POST failed: HTTP {r.status_code}: {r.text[:300]}"}), 502
     except Exception as e:
-        return jsonify({"success": False, "error": f"Health check create error: {e}"}), 502
+        return jsonify({"success": False, "error": f"Health check POST error: {e}"}), 502
 
-    # Step 2: poll until result is available (max ~2 min)
+    # Handle response — may be HTML directly or JSON with request IDs to poll
+    content_type = r.headers.get("content-type", "")
+    if "html" in content_type:
+        return jsonify({"success": True, "html": r.text, "request_id": site_token})
+
+    resp_data = r.json()
+
+    # If HTML is embedded in the JSON response
+    hc_html = resp_data.get("enodeb_healthcheck_result", "")
+    if hc_html and hc_html != "No HCs found":
+        if not isinstance(hc_html, str):
+            import json as _json
+            hc_html = _json.dumps(hc_html)
+        return jsonify({"success": True, "html": hc_html, "request_id": site_token})
+
+    # If we got a request ID back, poll for the result
+    request_ids = (
+        resp_data.get("requestIds")
+        or resp_data.get("request_ids")
+        or ([resp_data["requestId"]] if resp_data.get("requestId") else [])
+        or ([resp_data["request_id"]] if resp_data.get("request_id") else [])
+    )
+    if not request_ids:
+        return jsonify({
+            "success": False,
+            "error": f"Unexpected IOP response: {str(resp_data)[:300]}",
+        }), 502
+
+    request_id = request_ids[0]
     poll_url = f"{IOP_BASE}/neops/enodeb/healthcheck/request/{request_id}"
     for attempt in range(31):
         if attempt > 0:
@@ -162,15 +242,15 @@ def fetch_healthcheck():
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                r = httpx.get(
+                rp = httpx.get(
                     poll_url,
                     headers={k: v for k, v in IOP_HEADERS.items() if k != "Content-Type"},
                     timeout=30,
                     verify=False,
                 )
-            if r.status_code != 200:
+            if rp.status_code != 200:
                 continue
-            result = r.json()
+            result = rp.json()
             hc_html = result.get("enodeb_healthcheck_result", "")
             if not isinstance(hc_html, str):
                 import json as _json
@@ -182,7 +262,7 @@ def fetch_healthcheck():
 
     return jsonify({
         "success": False,
-        "error": f"Health check timed out (request ID: {request_id}). Try again in a few minutes.",
+        "error": f"Health check timed out waiting for results (request ID: {request_id}).",
     }), 504
 
 
