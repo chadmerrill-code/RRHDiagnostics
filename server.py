@@ -127,7 +127,7 @@ IOP_HEADERS = {
 def fetch_healthcheck():
     body = request.get_json(force=True, silent=True) or {}
     site_token = (body.get("site_token") or "").strip()
-    eid = (body.get("eid") or "MERCH79").strip()
+    eid = (body.get("eid") or "").strip()
 
     if not site_token:
         return jsonify({"success": False, "error": "site_token is required"}), 400
