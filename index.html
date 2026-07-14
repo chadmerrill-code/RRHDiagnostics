@@ -923,57 +923,128 @@ function downloadPdf(idx){
 }
 
 // ============================================================
-// IOP API FETCH
+// IOP API FETCH — multi-step with live narrative
 // ============================================================
-var _fetchTimer=null;
-function fetchFromApi(){
+var _POLL_QUIPS=[
+  'IOP is warming up its stethoscope...',
+  'Poking the eNodeBs with a very long stick...',
+  'Checking if the cables are plugged in...',
+  'Running diagnostics at tower speed (slow)...',
+  'IOP: "Hold on, I\'m being thorough."',
+  '☕ Grabbing a coffee while IOP works...',
+  'Counting radio units one by one...',
+  'IOP is reading the manual...',
+  'Asking the tower nicely to respond...',
+  '🎵 Hold music: da da da da da...',
+  'IOP is checking every fiber strand.',
+  'Consulting the oracle of radio health...',
+  '🥱 This is totally normal. Yep.',
+  'The eNodeBs are being very thorough about their checkup.',
+  'IOP doesn\'t skip leg day OR health checks.',
+  '🧘 Practicing patience...',
+  'Halfway to the timeout wall! Still going!',
+  'Radio: "I\'m fine." IOP: "Are you though?"',
+  'IOP is triple-checking the triple-checks.',
+  '📻 Carrier pigeon dispatched to the tower...',
+  '3 minutes in. Totally expected. Probably.',
+  'IOP: still crunching. You: still waiting.',
+  'Counting antenna ports... 1... 2... still counting...',
+  'The network is having a think.',
+  '🌟 IOP is giving this its full, undivided attention.',
+  'Asking the RRH how it\'s REALLY feeling...',
+  '3.5 min. IOP writes very detailed reports.',
+  'Checking PRBs, CPRI, optical, and vibes.',
+  '🤔 Is this thing on? (It is. Probably.)',
+  '4 minutes. Deep breath. It\'s fine.',
+  '🤞 Fingers crossed for Completed status...',
+  'IOP: "I\'ll be done when I\'m done."',
+  'The tower is composing its response carefully.',
+  '4.5 min. We believe in you, IOP.',
+  '🎲 Statistically, this completes soon.',
+  'Almost at the 5 minute mark. The classic.',
+  '⏰ Come on IOP, you\'ve got this!',
+  'Last stretch! The HTML is right there!',
+  '🙏 Any time now... any... time...',
+  '🚨 Final attempt! Do NOT let us down!'
+];
+
+function _setFetchStatus(el, msg, color){
+  el.style.color=color||'var(--muted)';
+  el.textContent=msg;
+}
+
+function _loadHCHtml(html, requestId){
+  var fname='EnodebHealthCheck_'+requestId+'.html';
+  hcFiles=[new File([new Blob([html],{type:'text/html'})],fname,{type:'text/html'})];
+  document.getElementById('hcLabel').textContent=fname;
+  document.getElementById('hc-preview-frame').srcdoc=html;
+  document.getElementById('hc-preview-section').style.display='';
+  processHtmlTexts([html]);
+}
+
+async function fetchFromApi(){
   var token=(document.getElementById('api-site-token').value||'').trim();
   var eid=(document.getElementById('api-eid').value||'').trim();
   if(!token){alert('Site token is required');return;}
   if(!eid){alert('EID is required');return;}
 
   var btn=document.getElementById('fetch-hc-btn');
-  var statusEl=document.getElementById('fetch-status');
+  var st=document.getElementById('fetch-status');
   btn.disabled=true;
-  statusEl.style.color='var(--muted)';
-  statusEl.textContent='Initiating health check request...';
 
-  clearInterval(_fetchTimer);
-  var elapsed=0;
-  _fetchTimer=setInterval(function(){
-    elapsed+=1;
-    if(elapsed>=5) statusEl.textContent='Polling IOP for health check results... ('+elapsed+'s elapsed)';
-  },1000);
+  try{
+    // ── Step 1: resolve eNodeB IDs ──────────────────────────
+    _setFetchStatus(st,'🔍 Step 1/4 — Asking IOP which eNodeBs are at this site...');
+    var r1=await fetch('get-enodeb-ids',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({site_token:token})});
+    var j1=await r1.json();
+    if(!j1.success){_setFetchStatus(st,'❌ Step 1 failed: '+j1.error,'var(--red)');return;}
+    var ids=j1.enodeb_ids;
+    _setFetchStatus(st,'📡 Step 1/4 — Found '+ids.length+' eNodeB'+(ids.length>1?'s':'')+': '+ids.join(', '));
 
-  fetch('fetch-healthcheck',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({site_token:token,eid:eid})
-  })
-  .then(function(r){return r.json();})
-  .then(function(resp){
-    clearInterval(_fetchTimer);
-    btn.disabled=false;
-    if(!resp.success){
-      statusEl.style.color='var(--red)';
-      statusEl.textContent='Error: '+resp.error;
-      return;
+    // ── Step 2: submit health check ─────────────────────────
+    await new Promise(function(r){setTimeout(r,400);}); // brief pause so user can read
+    _setFetchStatus(st,'📋 Step 2/4 — Filing the health check paperwork with IOP...');
+    var r2=await fetch('create-healthcheck',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({site_token:token,enodeb_ids:ids,eid:eid})});
+    var j2=await r2.json();
+    if(!j2.success){_setFetchStatus(st,'❌ Step 2 failed: '+j2.error,'var(--red)');return;}
+    if(j2.html){_setFetchStatus(st,'✅ Health check complete!','var(--green)');_loadHCHtml(j2.html,j2.request_id);return;}
+
+    var reqId=j2.request_id;
+    _setFetchStatus(st,'🏥 Step 2/4 — Health check submitted! Request #'+reqId+' — IOP is warming up its stethoscope...');
+
+    // ── Step 3: poll for completion ─────────────────────────
+    await new Promise(function(r){setTimeout(r,600);});
+    for(var attempt=0;attempt<40;attempt++){
+      if(attempt>0) await new Promise(function(r){setTimeout(r,10000);});
+      var elapsed=attempt*10;
+      var quip=_POLL_QUIPS[attempt]||'Still waiting...';
+      _setFetchStatus(st,'⏳ Step 3/4 — ['+elapsed+'s | attempt '+(attempt+1)+'/40] '+quip);
+
+      var r3=await fetch('poll-healthcheck',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({request_id:reqId})});
+      var j3=await r3.json();
+      if(!j3.success){_setFetchStatus(st,'❌ Poll error: '+j3.error,'var(--red)');return;}
+
+      _setFetchStatus(st,'⏳ Step 3/4 — ['+elapsed+'s | attempt '+(attempt+1)+'/40] '+quip+' — IOP status: '+j3.status);
+
+      if(j3.done){
+        _setFetchStatus(st,'🎉 Step 3/4 — IOP says Completed! Grabbing the HTML...','var(--green)');
+        await new Promise(function(r){setTimeout(r,300);});
+        _setFetchStatus(st,'🔬 Step 4/4 — Parsing health check and running diagnostics...','var(--blue)');
+        _loadHCHtml(j3.html,reqId);
+        _setFetchStatus(st,'✅ Done! Request #'+reqId+' — scroll down for results.','var(--green)');
+        return;
+      }
     }
-    statusEl.style.color='var(--green)';
-    statusEl.textContent='Health check fetched (request '+resp.request_id+').';
-    var fname='EnodebHealthCheck_'+resp.request_id+'.html';
-    hcFiles=[new File([new Blob([resp.html],{type:'text/html'})],fname,{type:'text/html'})];
-    document.getElementById('hcLabel').textContent=fname;
-    document.getElementById('hc-preview-frame').srcdoc=resp.html;
-    document.getElementById('hc-preview-section').style.display='';
-    processHtmlTexts([resp.html]);
-  })
-  .catch(function(err){
-    clearInterval(_fetchTimer);
+    _setFetchStatus(st,'⏰ Timed out after 390s waiting for Request #'+reqId+'. Check IOP directly.','var(--orange)');
+
+  }catch(err){
+    _setFetchStatus(st,'❌ Unexpected error: '+(err.message||err),'var(--red)');
+  }finally{
     btn.disabled=false;
-    statusEl.style.color='var(--red)';
-    statusEl.textContent='Request failed: '+(err.message||String(err));
-  });
+  }
 }
 
 // ============================================================
@@ -1078,14 +1149,8 @@ function loadExistingHC(requestId){
       statusEl.textContent='Error: '+resp.error;
       return;
     }
-    statusEl.style.color='var(--green)';
-    statusEl.textContent='Health check loaded (request '+resp.request_id+').';
-    var fname='EnodebHealthCheck_'+resp.request_id+'.html';
-    hcFiles=[new File([new Blob([resp.html],{type:'text/html'})],fname,{type:'text/html'})];
-    document.getElementById('hcLabel').textContent=fname;
-    document.getElementById('hc-preview-frame').srcdoc=resp.html;
-    document.getElementById('hc-preview-section').style.display='';
-    processHtmlTexts([resp.html]);
+    _setFetchStatus(statusEl,'✅ Loaded request #'+resp.request_id+' — running diagnostics...','var(--green)');
+    _loadHCHtml(resp.html, resp.request_id);
   })
   .catch(function(err){
     btn.disabled=false;
