@@ -150,19 +150,30 @@ def fetch_healthcheck():
     except Exception as e:
         return jsonify({"success": False, "error": f"Node details error: {e}"}), 502
 
-    # Extract eNodeB IDs — try common field names
-    enodeb_ids = (
-        node_data.get("enodeb_ids")
-        or node_data.get("enodebIds")
-        or [str(e.get("id") or e.get("enodebId") or e.get("enodeb_id") or "")
-            for e in (node_data.get("enodebs") or node_data.get("eNodeBs") or []) if e]
+    # Extract eNodeB IDs — response is {"nodes": [...]}
+    node_list = (
+        node_data.get("nodes")
+        or node_data.get("enodebs")
+        or node_data.get("eNodeBs")
+        or []
     )
-    enodeb_ids = [str(i) for i in enodeb_ids if i]
+    _id_fields = ("enodeb_id", "enodebId", "eNodeBId", "nodeId", "id", "enodeb", "eNBId")
+    enodeb_ids = []
+    for n in node_list:
+        if isinstance(n, (str, int)):
+            enodeb_ids.append(str(n))
+        elif isinstance(n, dict):
+            for f in _id_fields:
+                if n.get(f):
+                    enodeb_ids.append(str(n[f]))
+                    break
+    enodeb_ids = [i for i in enodeb_ids if i]
 
     if not enodeb_ids:
+        first_node_keys = list(node_list[0].keys()) if node_list and isinstance(node_list[0], dict) else []
         return jsonify({
             "success": False,
-            "error": f"Could not find eNodeB IDs in node details. Keys returned: {list(node_data.keys())}",
+            "error": f"Could not find eNodeB IDs in nodes list. First node keys: {first_node_keys}",
         }), 502
 
     # Step 2: POST health check with correct IOP payload
