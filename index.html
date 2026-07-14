@@ -1057,6 +1057,7 @@ function renderCard(vendor,siteId,hc,findings,swRows,idx){
       '<button class="run-btn" id="run-btn-'+idx+'" onclick="runDiag('+idx+')">&#9654;  Run AI Diagnosis</button>'+
       '<div class="spinner" id="spinner-'+idx+'"><span class="spin-icon">&#8987;</span> Analyzing — generating remote troubleshooting steps and dispatch instructions...</div>'+
       '<div id="ai-result-'+idx+'"></div>'+
+      '<div id="amos-panel-'+idx+'"></div>'+
     '</div>'+
     '<div class="debug-toggle" onclick="toggleBlock(\'debug-'+idx+'\',this)"><span>&#9658;</span> &#128269; Debug — LLM Prompt</div>'+
     '<div class="debug-block" id="debug-'+idx+'"><pre>'+escHtml(prompt)+'</pre></div>'+
@@ -1122,6 +1123,12 @@ function runDiag(idx){
       document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> 🤖 Still generating... the AI is being thorough. Suspiciously thorough.';
   },10000);
 
+  // Auto-start AMOS session immediately when diagnosis begins
+  _amosSess[idx]={sessionId:null,node:siteId,status:'disconnected',
+    commands:[],stepStates:{},outputHtml:''};
+  _renderAmosPanel(idx);
+  amosConnect(idx);
+
   fetch('diagnose',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -1163,11 +1170,6 @@ function renderAIResult(idx,result,findings){
         (sec2?renderMarkdown(sec2):'<p style="color:var(--muted)"><em>Dispatch section not generated.</em></p>')+
       '</div>'+
     '</div>'+
-    '<div id="amos-panel-'+idx+'" style="margin-top:4px">'+
-      '<button class="run-btn" style="background:#060b12;border:1px solid #1f3a6e;color:#58a6ff;margin:12px 0 0" onclick="openAmosTerminal('+idx+')">'+
-        '&#128187; Open AMOS Session &mdash; Execute Section 1 Steps'+
-      '</button>'+
-    '</div>'+
     '<div style="margin-top:12px">'+
       '<button class="download-btn" id="dl-btn-'+idx+'" onclick="downloadPdf('+idx+')">'+
         '&#11015; Download Diagnostic Report (PDF)'+
@@ -1176,6 +1178,13 @@ function renderAIResult(idx,result,findings){
     '</div>';
   // store result for PDF generation
   _cardData[idx]._llmResult = result;
+  // update AMOS commands from Section 1 without destroying existing session
+  if(!_amosSess[idx]){
+    _amosSess[idx]={sessionId:null,node:(_cardData[idx]||{}).siteId||'',
+      status:'disconnected',commands:[],stepStates:{},outputHtml:''};
+  }
+  _amosSess[idx].commands=_parseSection1Commands(sec1);
+  _renderAmosPanel(idx);
 }
 
 function downloadPdf(idx){
