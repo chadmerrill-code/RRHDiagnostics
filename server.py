@@ -247,6 +247,8 @@ def fetch_healthcheck():
     for attempt in range(40):
         if attempt > 0:
             time.sleep(10)
+        elapsed = attempt * 10
+        print(f"[Poll {attempt+1}/40 | {elapsed}s] GET {poll_url}", flush=True)
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -256,15 +258,18 @@ def fetch_healthcheck():
                     timeout=30,
                     verify=False,
                 )
+            print(f"[Poll {attempt+1}/40 | {elapsed}s] HTTP {rp.status_code}", flush=True)
             if rp.status_code != 200:
                 continue
             result = rp.json()
             hc_data = result.get("enodeb_healthcheck_result", {})
             if not isinstance(hc_data, dict):
+                print(f"[Poll {attempt+1}/40] enodeb_healthcheck_result not a dict: {type(hc_data)}", flush=True)
                 continue
-            if hc_data.get("status") != "Completed":
+            status = hc_data.get("status", "(missing)")
+            print(f"[Poll {attempt+1}/40 | {elapsed}s] status={status}", flush=True)
+            if status != "Completed":
                 continue
-            # HTML lives at ondemand_info/precheck_info/postcheck_info → result[0].output[0]
             hc_html = ""
             for info_key in ("ondemand_info", "precheck_info", "postcheck_info"):
                 outputs = (hc_data.get(info_key) or {}).get("result") or []
@@ -272,10 +277,13 @@ def fetch_healthcheck():
                     out = (outputs[0].get("output") or [])
                     if out and out[0]:
                         hc_html = out[0]
+                        print(f"[Poll {attempt+1}/40] HTML found under {info_key}, len={len(hc_html)}", flush=True)
                         break
             if hc_html:
                 return jsonify({"success": True, "html": hc_html, "request_id": request_id})
-        except Exception:
+            print(f"[Poll {attempt+1}/40] Completed but no HTML found in ondemand/precheck/postcheck_info", flush=True)
+        except Exception as ex:
+            print(f"[Poll {attempt+1}/40 | {elapsed}s] Exception: {ex}", flush=True)
             continue
 
     return jsonify({
