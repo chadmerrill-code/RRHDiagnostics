@@ -1026,7 +1026,7 @@ function _hcField(item){
 function renderHCList(data,panel,start,end){
   // Try known wrapper keys, then any array value in the object, then bare array
   var items=null;
-  var wrappers=['enodeb_healthcheck_list','enodeb_healthchecks','healthcheck_list','data','results','healthchecks','list','items','records'];
+  var wrappers=['enodeb_healthcheck','enodeb_healthcheck_list','enodeb_healthchecks','healthcheck_list','data','results','healthchecks','list','items','records'];
   for(var i=0;i<wrappers.length;i++){if(Array.isArray(data[wrappers[i]])){items=data[wrappers[i]];break;}}
   if(!items&&Array.isArray(data)) items=data;
   if(!items){
