@@ -137,6 +137,39 @@
   .right-tab-btn.active{color:var(--blue);border-bottom-color:var(--blue)}
   .right-tab-pane{display:none}
   .right-tab-pane.active{display:block}
+  /* AMOS terminal */
+  .amos-wrap{margin-top:16px;border:1px solid #1f3a6e;border-radius:8px;overflow:hidden;background:#060b12}
+  .amos-hdr{background:#0d1f3c;padding:9px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-bottom:1px solid #1f3a6e}
+  .amos-title{font-family:monospace;font-size:.88em;font-weight:700;color:#58a6ff;flex:1}
+  .amos-node-inp{background:#060b12;border:1px solid #1f3a6e;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:.8em;padding:4px 8px;width:180px}
+  .amos-node-inp:focus{outline:none;border-color:#58a6ff}
+  .amos-dot{width:9px;height:9px;border-radius:50%;background:#333;flex-shrink:0;transition:background .3s}
+  .amos-dot.ok{background:#2ecc71}
+  .amos-dot.busy{background:#f39c12;animation:amos-pulse .7s infinite}
+  .amos-dot.err{background:#e74c3c}
+  @keyframes amos-pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .amos-btn{padding:4px 12px;border:none;border-radius:4px;font-size:.78em;font-weight:600;cursor:pointer;white-space:nowrap}
+  .amos-btn-conn{background:#0d2e1a;color:#2ecc71;border:1px solid #2ecc7155}
+  .amos-btn-conn:hover{background:#133d22}
+  .amos-btn-conn:disabled{background:#111;color:#444;cursor:not-allowed;border-color:#333}
+  .amos-btn-close{background:#2a0e0e;color:#e74c3c;border:1px solid #e74c3c55}
+  .amos-btn-runall{background:#0d1f3c;color:#58a6ff;border:1px solid #58a6ff55}
+  .amos-btn-runall:disabled{background:#111;color:#444;cursor:not-allowed;border-color:#333}
+  .amos-steps{padding:10px 14px;border-bottom:1px solid #1f3a6e11;display:flex;flex-direction:column;gap:5px}
+  .amos-step{display:flex;align-items:center;gap:8px}
+  .amos-sicon{width:17px;height:17px;border-radius:50%;border:1px solid #333;display:flex;align-items:center;justify-content:center;font-size:.68em;flex-shrink:0;font-weight:700;transition:all .2s}
+  .amos-sicon.pending{color:#555;border-color:#333}
+  .amos-sicon.running{color:#f39c12;border-color:#f39c12;animation:amos-pulse .7s infinite}
+  .amos-sicon.pass{color:#2ecc71;border-color:#2ecc71;background:#0a1f12}
+  .amos-sicon.fail{color:#e74c3c;border-color:#e74c3c;background:#1a0808}
+  .amos-step-cmd{font-family:'Courier New',monospace;font-size:.8em;color:#a5d6ff;background:#0d1117;padding:2px 8px;border-radius:3px;flex:1;word-break:break-all}
+  .amos-run-btn{padding:2px 8px;background:#0d1f3c;border:1px solid #1f3a6e;border-radius:3px;color:#58a6ff;font-size:.73em;cursor:pointer;flex-shrink:0}
+  .amos-run-btn:hover{background:#1a3560}
+  .amos-run-btn:disabled{background:#111;color:#333;cursor:not-allowed;border-color:#222}
+  .amos-out{padding:12px 14px;font-family:'Courier New',Courier,monospace;font-size:.79em;color:#c9d1d9;min-height:100px;max-height:320px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;line-height:1.5;border-top:1px solid #1f3a6e22}
+  .amos-out .ao-cmd{color:#58a6ff;font-weight:bold}
+  .amos-out .ao-err{color:#e74c3c}
+  .amos-out .ao-ok{color:#2ecc71}
   /* Splash loader */
   #splash{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;transition:opacity .4s}
   #splash.hidden{opacity:0;pointer-events:none}
@@ -1130,6 +1163,11 @@ function renderAIResult(idx,result,findings){
         (sec2?renderMarkdown(sec2):'<p style="color:var(--muted)"><em>Dispatch section not generated.</em></p>')+
       '</div>'+
     '</div>'+
+    '<div id="amos-panel-'+idx+'" style="margin-top:4px">'+
+      '<button class="run-btn" style="background:#060b12;border:1px solid #1f3a6e;color:#58a6ff;margin:12px 0 0" onclick="openAmosTerminal('+idx+')">'+
+        '&#128187; Open AMOS Session &mdash; Execute Section 1 Steps'+
+      '</button>'+
+    '</div>'+
     '<div style="margin-top:12px">'+
       '<button class="download-btn" id="dl-btn-'+idx+'" onclick="downloadPdf('+idx+')">'+
         '&#11015; Download Diagnostic Report (PDF)'+
@@ -1558,6 +1596,162 @@ function renderAll(cards){
   }).join('');
   switchRightTab('diag');
   if(_pst) _setFetchStatus(_pst,'✅ '+valid.length+' site'+(valid.length>1?'s':'')+' parsed — results ready.','var(--green)');
+}
+
+// ============================================================
+// AMOS TERMINAL
+// ============================================================
+var _amosSess = {};   // idx → {sessionId, node, status, commands, stepStates, outputHtml}
+
+function _parseSection1Commands(rawText){
+  var sec1 = rawText.indexOf('## Section 2') >= 0 ? rawText.split('## Section 2')[0] : rawText;
+  var cmds = [], seen = {};
+  function add(c){
+    c = c.trim();
+    if(c && c.length > 2 && !seen[c] && !/^https?:/.test(c) && !/^[#\-]/.test(c)){
+      seen[c] = true; cmds.push(c);
+    }
+  }
+  // 1. Fenced code blocks
+  sec1.replace(/```[a-z]*\n?([\s\S]*?)```/g, function(_,b){
+    b.trim().split('\n').forEach(function(l){ add(l.trim()); });
+  });
+  // 2. Inline backticks
+  sec1.replace(/`([^`\n]{2,})`/g, function(_,c){ add(c); });
+  // 3. Bare AMOS MML keywords on their own line
+  sec1.split('\n').forEach(function(line){
+    var l = line.trim();
+    if(/^(st|acc|set|hget|lget|lset|sdir|mfirt|alt|cv|se|pr|lm|bl|ue|ab)\s/i.test(l) && !seen[l]) add(l);
+  });
+  return cmds;
+}
+
+function openAmosTerminal(idx){
+  var d = _cardData[idx]; if(!d) return;
+  if(!_amosSess[idx]){
+    _amosSess[idx] = {sessionId:null, node:d.siteId||'', status:'disconnected',
+      commands:_parseSection1Commands(d._llmResult||''), stepStates:{}, outputHtml:''};
+  }
+  _renderAmosPanel(idx);
+}
+
+function _renderAmosPanel(idx){
+  var s = _amosSess[idx]; if(!s) return;
+  var panel = document.getElementById('amos-panel-'+idx); if(!panel) return;
+  var dotCls = s.status==='connected'?'ok':s.status==='connecting'?'busy':s.status==='error'?'err':'';
+  var stepsHtml = s.commands.length ? s.commands.map(function(cmd,i){
+    var st = s.stepStates[i]||'pending';
+    var ic = st==='pass'?'✓':st==='fail'?'✗':st==='running'?'●':'○';
+    return '<div class="amos-step" id="amos-step-'+idx+'-'+i+'">'+
+      '<div class="amos-sicon '+st+'">'+ic+'</div>'+
+      '<span class="amos-step-cmd">'+escHtml(cmd)+'</span>'+
+      '<button class="amos-run-btn" id="amosRun-'+idx+'-'+i+'" '+(s.sessionId?'':'disabled')+
+        ' onclick="amosRunCmd('+idx+','+i+')">▶ Run</button>'+
+    '</div>';
+  }).join('') : '<p style="color:var(--muted);font-size:.83em;padding:4px 0">No commands parsed from Section 1.</p>';
+
+  panel.innerHTML =
+    '<div class="amos-wrap">'+
+    '<div class="amos-hdr">'+
+      '<span class="amos-dot '+dotCls+'" id="amos-dot-'+idx+'"></span>'+
+      '<span class="amos-title">🖥️ AMOS Session</span>'+
+      '<label style="font-size:.74em;color:var(--muted);margin-right:3px">Node:</label>'+
+      '<input class="amos-node-inp" id="amos-node-'+idx+'" value="'+escHtml(s.node)+'" placeholder="ENM node name (e.g. 168025)"/>'+
+      '<button class="amos-btn amos-btn-conn" id="amos-conn-'+idx+'" '+(s.status==='connected'?'disabled':'')+
+        ' onclick="amosConnect('+idx+')">'+(s.status==='connected'?'✓ Connected':'⚡ Connect')+'</button>'+
+      (s.sessionId?'<button class="amos-btn amos-btn-close" onclick="amosCloseSession('+idx+')">✖ Close</button>':'')+
+      (s.sessionId&&s.commands.length?'<button class="amos-btn amos-btn-runall" id="amos-all-'+idx+'" onclick="amosRunAll('+idx+')">▶▶ Run All Steps</button>':'')+
+    '</div>'+
+    '<div class="amos-steps">'+stepsHtml+'</div>'+
+    '<div class="amos-out" id="amos-out-'+idx+'">'+
+      (s.outputHtml||'<span style="color:#333">// AMOS output will appear here...</span>')+
+    '</div>'+
+    '</div>';
+}
+
+function _amosLog(idx, text, cls){
+  var el = document.getElementById('amos-out-'+idx); if(!el) return;
+  if(el.innerHTML.indexOf('will appear here') >= 0) el.innerHTML = '';
+  var d = document.createElement('div');
+  if(cls) d.className = cls;
+  d.textContent = text;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+  if(_amosSess[idx]) _amosSess[idx].outputHtml = el.innerHTML;
+}
+
+function _amosStepState(idx, i, state){
+  if(_amosSess[idx]) _amosSess[idx].stepStates[i] = state;
+  var el = document.getElementById('amos-step-'+idx+'-'+i); if(!el) return;
+  var ic = el.querySelector('.amos-sicon'); if(!ic) return;
+  ic.className = 'amos-sicon '+state;
+  ic.textContent = state==='pass'?'✓':state==='fail'?'✗':state==='running'?'●':'○';
+}
+
+async function amosConnect(idx){
+  var inp = document.getElementById('amos-node-'+idx); if(!inp) return;
+  var node = inp.value.trim(); if(!node){ alert('Enter ENM node name'); return; }
+  var s = _amosSess[idx] = _amosSess[idx] || {sessionId:null, node:'', status:'disconnected', commands:[], stepStates:{}, outputHtml:''};
+  s.node = node; s.status = 'connecting';
+  var dot = document.getElementById('amos-dot-'+idx);
+  if(dot) dot.className = 'amos-dot busy';
+  var btn = document.getElementById('amos-conn-'+idx);
+  if(btn){ btn.disabled=true; btn.textContent='Connecting...'; }
+  _amosLog(idx, '⚡ Connecting to '+node+' via ENM direct...', 'ao-cmd');
+  try{
+    var r = await fetch('amos-connect',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({node:node})});
+    var j = await r.json();
+    if(!j.success) throw new Error(j.error);
+    s.sessionId = j.session_id; s.status = 'connected';
+    if(j.banner) _amosLog(idx, j.banner);
+    _amosLog(idx, '✅ Session '+j.session_id+' — prompt: '+j.prompt, 'ao-ok');
+    _renderAmosPanel(idx);
+  }catch(err){
+    s.status = 'error';
+    _amosLog(idx, '❌ '+( err.message||err), 'ao-err');
+    if(dot) dot.className = 'amos-dot err';
+    if(btn){ btn.disabled=false; btn.textContent='⚡ Connect'; }
+  }
+}
+
+async function amosRunCmd(idx, i){
+  var s = _amosSess[idx]; if(!s||!s.sessionId){ alert('Connect first'); return; }
+  var cmd = s.commands[i]; if(!cmd) return;
+  _amosStepState(idx, i, 'running');
+  _amosLog(idx, (s.node||'amos')+' > '+cmd, 'ao-cmd');
+  var btn = document.getElementById('amosRun-'+idx+'-'+i);
+  if(btn) btn.disabled = true;
+  try{
+    var r = await fetch('amos-run-cmd',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_id:s.sessionId, command:cmd})});
+    var j = await r.json();
+    if(!j.success) throw new Error(j.error);
+    if(j.output) _amosLog(idx, j.output);
+    _amosStepState(idx, i, 'pass');
+  }catch(err){
+    _amosLog(idx, '❌ '+(err.message||err), 'ao-err');
+    _amosStepState(idx, i, 'fail');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function amosRunAll(idx){
+  var s = _amosSess[idx]; if(!s||!s.sessionId){ alert('Connect first'); return; }
+  var btn = document.getElementById('amos-all-'+idx); if(btn) btn.disabled=true;
+  for(var i=0;i<s.commands.length;i++) await amosRunCmd(idx,i);
+  if(btn) btn.disabled=false;
+}
+
+async function amosCloseSession(idx){
+  var s = _amosSess[idx]; if(!s||!s.sessionId) return;
+  await fetch('amos-close',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({session_id:s.sessionId})}).catch(function(){});
+  _amosLog(idx, '✖ Session closed.', 'ao-err');
+  s.sessionId=null; s.status='disconnected';
+  Object.keys(s.stepStates).forEach(function(k){ s.stepStates[k]='pending'; });
+  _renderAmosPanel(idx);
 }
 
 // Auto-fill from URL params — pre-fill fields and show recent HCs; never auto-start a new health check

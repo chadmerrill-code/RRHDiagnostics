@@ -518,6 +518,155 @@ def pdf():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ── AMOS / ENM direct connection ─────────────────────────────
+# Reuses the same RSA key and direct host as TicketTracker
+AMOS_DIRECT_HOST = "10.216.230.154"
+AMOS_DIRECT_PORT = 22
+AMOS_DIRECT_USER = "ctchgrp"
+AMOS_KEY_FILE    = r"C:\Users\merch79\Documents\TicketTracker\data\amos_identity"
+AMOS_KEY_PASS    = ""    # key passphrase if set (check amos_key_passphrase in TicketTracker settings)
+AMOS_CMD_TIMEOUT = 90    # seconds to wait for command output
+
+try:
+    import paramiko as _paramiko
+    _PARAMIKO_OK = True
+except ImportError:
+    _PARAMIKO_OK = False
+
+import uuid as _uuid
+import re as _re
+
+_amos_sessions: dict = {}   # session_id → {ssh, channel, node, prompt_re}
+
+_ANSI_RE = _re.compile(
+    r'\x1b\[[0-9;]*[a-zA-Z]'
+    r'|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)'
+    r'|\x1b[()][A-Z0-9]'
+    r'|\x1b[^[\]()]'
+)
+_AMOS_PROMPT_RE = _re.compile(r'^[\w][\w._-]*>\s*$', _re.MULTILINE)
+
+
+def _strip_ansi(s: str) -> str:
+    return _ANSI_RE.sub('', s).replace('\r', '')
+
+
+def _amos_read_until(channel, pattern, timeout: float = AMOS_CMD_TIMEOUT) -> str:
+    if isinstance(pattern, str):
+        pattern = _re.compile(_re.escape(pattern), _re.MULTILINE)
+    buf = ""
+    end = time.time() + timeout
+    while time.time() < end:
+        if channel.recv_ready():
+            buf += _strip_ansi(channel.recv(8192).decode("utf-8", errors="replace"))
+            if pattern.search(buf):
+                return buf
+        elif channel.closed or channel.exit_status_ready():
+            break
+        else:
+            time.sleep(0.1)
+    return buf
+
+
+@app.route("/amos-connect", methods=["POST"])
+def amos_connect():
+    if not _PARAMIKO_OK:
+        return jsonify({"success": False, "error": "paramiko not installed — run: pip install paramiko"}), 500
+
+    import os
+    body = request.get_json(force=True, silent=True) or {}
+    node = (body.get("node") or "").strip()
+    if not node:
+        return jsonify({"success": False, "error": "node name required"}), 400
+    if not os.path.isfile(AMOS_KEY_FILE):
+        return jsonify({"success": False, "error": f"RSA key not found: {AMOS_KEY_FILE}"}), 500
+
+    try:
+        pkey = _paramiko.RSAKey.from_private_key_file(AMOS_KEY_FILE, password=AMOS_KEY_PASS or None)
+        ssh = _paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
+        ssh.connect(
+            AMOS_DIRECT_HOST, port=AMOS_DIRECT_PORT, username=AMOS_DIRECT_USER,
+            pkey=pkey, timeout=30, allow_agent=False, look_for_keys=False,
+        )
+        channel = ssh.invoke_shell(term='vt100', width=220, height=50)
+        time.sleep(1.5)
+        while channel.recv_ready():
+            channel.recv(8192)   # drain banner
+
+        channel.send(f"amos {node}\r\n")
+        banner = _amos_read_until(channel, _AMOS_PROMPT_RE, timeout=60)
+
+        if not _AMOS_PROMPT_RE.search(banner):
+            ssh.close()
+            return jsonify({"success": False,
+                            "error": f"No AMOS prompt for node '{node}'. Got: {banner[-300:]}"}), 500
+
+        # Derive exact prompt for precise matching (avoids false positives on cell IDs)
+        exact = next(
+            (l.strip() for l in reversed(banner.splitlines()) if _AMOS_PROMPT_RE.match(l.strip())),
+            ""
+        )
+        prompt_re = (
+            _re.compile(f'^{_re.escape(exact)}\\s*$', _re.MULTILINE) if exact else _AMOS_PROMPT_RE
+        )
+
+        # Drain late startup noise
+        time.sleep(1.5)
+        while channel.recv_ready():
+            channel.recv(8192)
+
+        # Setup: ul — enables user labels (no output collected)
+        channel.send("ul\r\n")
+        _amos_read_until(channel, prompt_re, timeout=30)
+
+        session_id = str(_uuid.uuid4())[:8]
+        _amos_sessions[session_id] = {"ssh": ssh, "channel": channel, "node": node, "prompt_re": prompt_re}
+        print(f"[AMOS] Session {session_id} opened — node={node} prompt={exact!r}", flush=True)
+        return jsonify({"success": True, "session_id": session_id, "banner": banner, "prompt": exact})
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/amos-run-cmd", methods=["POST"])
+def amos_run_cmd():
+    body = request.get_json(force=True, silent=True) or {}
+    session_id = (body.get("session_id") or "").strip()
+    command    = (body.get("command") or "").strip()
+    if session_id not in _amos_sessions:
+        return jsonify({"success": False, "error": "Session not found — connect first"}), 400
+    if not command:
+        return jsonify({"success": False, "error": "command required"}), 400
+
+    sess = _amos_sessions[session_id]
+    channel, prompt_re, node = sess["channel"], sess["prompt_re"], sess["node"]
+    try:
+        channel.send(command + "\r\n")
+        raw = _amos_read_until(channel, prompt_re, timeout=AMOS_CMD_TIMEOUT)
+        output = prompt_re.sub('', raw).strip()
+        print(f"[AMOS] {session_id}/{node}: {command!r} → {len(output)}c", flush=True)
+        return jsonify({"success": True, "output": output})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/amos-close", methods=["POST"])
+def amos_close():
+    body = request.get_json(force=True, silent=True) or {}
+    session_id = (body.get("session_id") or "").strip()
+    if session_id in _amos_sessions:
+        sess = _amos_sessions.pop(session_id)
+        try:
+            sess["channel"].send("q\r\n")
+            time.sleep(0.5)
+            sess["ssh"].close()
+        except Exception:
+            pass
+        print(f"[AMOS] Session {session_id} closed", flush=True)
+    return jsonify({"success": True})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8082))
     print(f"\n  AI Powered RRH OOS Diagnostics & Remediation")

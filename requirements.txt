@@ -5,3 +5,4 @@ beautifulsoup4
 pandas
 python-calamine
 anthropic
+paramiko
