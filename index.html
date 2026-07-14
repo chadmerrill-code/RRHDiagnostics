@@ -960,18 +960,16 @@ function fetchFromApi(){
       return;
     }
     statusEl.style.color='var(--green)';
-    statusEl.textContent='Health check fetched (request '+resp.request_id+'). Parsing...';
+    statusEl.textContent='Health check fetched (request '+resp.request_id+').';
     var blob=new Blob([resp.html],{type:'text/html'});
     var fname='healthcheck_'+resp.request_id+'.html';
     var file=new File([blob],fname,{type:'text/html'});
     var dt=new DataTransfer();
     dt.items.add(file);
     document.getElementById('hcInput').files=dt.files;
-    hcFiles=[file];
-    document.getElementById('hcLabel').textContent=fname;
     document.getElementById('hc-preview-frame').srcdoc=resp.html;
     document.getElementById('hc-preview-section').style.display='';
-    processAll();
+    document.getElementById('hcInput').dispatchEvent(new Event('change'));
   })
   .catch(function(err){
     clearInterval(_fetchTimer);
@@ -1084,18 +1082,16 @@ function loadExistingHC(requestId){
       return;
     }
     statusEl.style.color='var(--green)';
-    statusEl.textContent='Health check loaded (request '+resp.request_id+'). Parsing...';
+    statusEl.textContent='Health check loaded (request '+resp.request_id+').';
     var blob=new Blob([resp.html],{type:'text/html'});
     var fname='healthcheck_'+resp.request_id+'.html';
     var file=new File([blob],fname,{type:'text/html'});
     var dt=new DataTransfer();
     dt.items.add(file);
     document.getElementById('hcInput').files=dt.files;
-    hcFiles=[file];
-    document.getElementById('hcLabel').textContent=fname;
     document.getElementById('hc-preview-frame').srcdoc=resp.html;
     document.getElementById('hc-preview-section').style.display='';
-    processAll();
+    document.getElementById('hcInput').dispatchEvent(new Event('change'));
   })
   .catch(function(err){
     btn.disabled=false;
