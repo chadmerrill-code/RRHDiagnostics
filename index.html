@@ -1036,6 +1036,17 @@ function renderAll(cards){
     return renderCard(c.vendor,c.siteId,c.hc,c.findings,c.swRows,i);
   }).join('');
 }
+
+// Auto-fill from URL params and fetch if both provided
+// Link format: /rrh/?token=<site_token>&eid=<eid>
+(function(){
+  var p=new URLSearchParams(location.search);
+  var token=p.get('token')||p.get('site_token')||'';
+  var eid=p.get('eid')||'';
+  if(token) document.getElementById('api-site-token').value=token;
+  if(eid)   document.getElementById('api-eid').value=eid;
+  if(token && eid) fetchFromApi();
+})();
 </script>
 </body>
 </html>
