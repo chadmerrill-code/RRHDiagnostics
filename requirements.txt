@@ -1,0 +1,7 @@
+flask
+httpx
+fpdf2
+beautifulsoup4
+pandas
+python-calamine
+anthropic
