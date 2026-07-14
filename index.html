@@ -74,6 +74,9 @@
   .run-btn{padding:10px 24px;background:var(--accent);border:none;border-radius:6px;color:#fff;font-size:.95em;font-weight:600;cursor:pointer;width:100%;transition:background .2s}
   .run-btn:hover{background:#2ea043}
   .run-btn:disabled{background:#555;cursor:not-allowed}
+  .prompt-btn{padding:6px 14px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:.8em;cursor:pointer;margin-top:6px;display:inline-block;transition:border-color .2s,color .2s}
+  .prompt-btn:hover{border-color:var(--blue);color:var(--blue)}
+  .prompt-pop{position:absolute;left:0;top:calc(100% + 6px);z-index:200;background:#111827;border:1px solid var(--border);border-radius:6px;padding:12px 14px;max-width:560px;max-height:320px;overflow-y:auto;white-space:pre-wrap;font-family:monospace;font-size:.77em;color:#c9d1d9;box-shadow:0 6px 24px rgba(0,0,0,.6);line-height:1.5}
   .ai-columns{display:flex;gap:16px;margin-top:16px;flex-wrap:wrap}
   .ai-col{flex:1;min-width:280px;padding:18px;border-radius:8px;font-size:.85em;line-height:1.6}
   .ai-col-remote{background:#0e2318;border-left:5px solid var(--green)}
@@ -1057,6 +1060,10 @@ function renderCard(vendor,siteId,hc,findings,swRows,idx){
     '<div class="ai-section">'+
       '<h3>&#129302; AI Diagnostic Output</h3>'+
       '<button class="run-btn" id="run-btn-'+idx+'" onclick="runDiag('+idx+')">&#9654;  Run AI Diagnosis</button>'+
+      '<div style="position:relative;display:inline-block">'+
+        '<button class="prompt-btn" onclick="viewPrompt('+idx+',this)">&#128203; View Prompt</button>'+
+        '<div class="prompt-pop" id="prompt-pop-'+idx+'" style="display:none"></div>'+
+      '</div>'+
       '<div class="spinner" id="spinner-'+idx+'"><span class="spin-icon">&#8987;</span> Analyzing — generating remote troubleshooting steps and dispatch instructions...</div>'+
       '<div id="ai-result-'+idx+'"></div>'+
       '<div id="amos-panel-'+idx+'"></div>'+
@@ -1100,6 +1107,30 @@ function switchRightTab(name,btn){
 // AI DIAGNOSIS — fetch to Flask /diagnose endpoint (relative path)
 // ============================================================
 var _cardData={};
+
+function viewPrompt(idx, btn){
+  var d=_cardData[idx]; if(!d) return;
+  var text;
+  try{ text=d.vendor==='Samsung'?buildPromptSamsung(d.siteId,d.findings,d.swRows):buildPromptEricsson(d.siteId,d.findings,d.swRows); }
+  catch(e){ text='Error building prompt: '+e; }
+  var pop=document.getElementById('prompt-pop-'+idx);
+  if(text.length>600){
+    // large prompt → download
+    var blob=new Blob([text],{type:'text/plain'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url; a.download='llm_prompt_'+(d.siteId||idx)+'.txt';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    if(pop) pop.style.display='none';
+  } else {
+    // small prompt → toggle popover
+    if(pop){
+      if(pop.style.display==='none'){ pop.textContent=text; pop.style.display='block'; }
+      else{ pop.style.display='none'; }
+    }
+  }
+}
 
 function runDiag(idx){
   var d=_cardData[idx];if(!d) return;
