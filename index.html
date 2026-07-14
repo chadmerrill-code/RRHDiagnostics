@@ -1452,12 +1452,8 @@ function renderHCList(data,panel,start,end){
       col(90,escHtml(rtype))+
       col(105,'<span class="hc-status-badge '+sCls+'">'+escHtml(status)+'</span>')+
       col(130,escHtml(enodebs),'flex:1;min-width:130px')+
-      col(105,escHtml(ip))+
-      col(130,escHtml(email))+
       col(120,escHtml(by))+
       col(150,escHtml(createdOn))+
-      col(135,escHtml(scheduled||'-'))+
-      col(150,escHtml(execTime||'-'))+
       (canLoad?'<button class="load-hc-btn" onclick="loadExistingHC(\''+rid.replace(/'/g,"\\'")+'\')">Load</button>':
                '<span style="color:var(--muted);font-size:.75em;min-width:44px">'+escHtml(status)+'</span>')+
     '</div>';
@@ -1466,8 +1462,7 @@ function renderHCList(data,panel,start,end){
     '<div class="hc-list-hdr">'+
       col(80,'Callout Zone')+col(90,'Type')+col(105,'Status')+
       col(130,'eNodeB#','flex:1;min-width:130px')+
-      col(105,'IP Address')+col(130,'Email Id')+col(120,'Created By')+
-      col(150,'Created On')+col(135,'Scheduled Time')+col(150,'Execution Time')+
+      col(120,'Created By')+col(150,'Created On')+
       '<span>Action</span>'+
     '</div>'+
     '<div class="hc-list-scroll">'+rows+'</div>'+
