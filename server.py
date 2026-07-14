@@ -141,7 +141,7 @@ def fetch_healthcheck():
                 create_url,
                 json={"workType": "Antenna / Tower", "createdBy": eid},
                 headers=IOP_HEADERS,
-                timeout=30,
+                timeout=60,
                 verify=False,
             )
         if r.status_code != 200:
@@ -172,6 +172,9 @@ def fetch_healthcheck():
                 continue
             result = r.json()
             hc_html = result.get("enodeb_healthcheck_result", "")
+            if not isinstance(hc_html, str):
+                import json as _json
+                hc_html = _json.dumps(hc_html)
             if hc_html and hc_html != "No HCs found":
                 return jsonify({"success": True, "html": hc_html, "request_id": str(request_id)})
         except Exception:
