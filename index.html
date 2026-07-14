@@ -939,7 +939,15 @@ function fetchFromApi(){
     }
     statusEl.style.color='var(--green)';
     statusEl.textContent='Health check fetched (request '+resp.request_id+'). Parsing...';
-    processHtmlTexts([resp.html]);
+    var blob=new Blob([resp.html],{type:'text/html'});
+    var fname='healthcheck_'+resp.request_id+'.html';
+    var file=new File([blob],fname,{type:'text/html'});
+    var dt=new DataTransfer();
+    dt.items.add(file);
+    document.getElementById('hcInput').files=dt.files;
+    hcFiles=[file];
+    document.getElementById('hcLabel').textContent=fname;
+    processAll();
   })
   .catch(function(err){
     clearInterval(_fetchTimer);
