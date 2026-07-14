@@ -284,6 +284,69 @@ def fetch_healthcheck():
     }), 504
 
 
+@app.route("/list-healthchecks", methods=["POST"])
+def list_healthchecks():
+    body = request.get_json(force=True, silent=True) or {}
+    site_token = (body.get("site_token") or "").strip()
+    start_date = (body.get("start_date") or "").strip()
+    end_date   = (body.get("end_date") or "").strip()
+    if not site_token:
+        return jsonify({"success": False, "error": "site_token is required"}), 400
+    params = {}
+    if start_date: params["start_date"] = start_date
+    if end_date:   params["end_date"]   = end_date
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = httpx.get(
+                f"{IOP_BASE}/neops/{site_token}/enodeb/healthcheck/",
+                params=params,
+                headers={k: v for k, v in IOP_HEADERS.items() if k != "Content-Type"},
+                timeout=30, verify=False,
+            )
+        if r.status_code != 200:
+            return jsonify({"success": False, "error": f"IOP list failed: HTTP {r.status_code}"}), 502
+        return jsonify({"success": True, "data": r.json()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 502
+
+
+@app.route("/fetch-existing-hc", methods=["POST"])
+def fetch_existing_hc():
+    body = request.get_json(force=True, silent=True) or {}
+    request_id = (body.get("request_id") or "").strip()
+    if not request_id:
+        return jsonify({"success": False, "error": "request_id is required"}), 400
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            rp = httpx.get(
+                f"{IOP_BASE}/neops/enodeb/healthcheck/request/{request_id}",
+                headers={k: v for k, v in IOP_HEADERS.items() if k != "Content-Type"},
+                timeout=30, verify=False,
+            )
+        if rp.status_code != 200:
+            return jsonify({"success": False, "error": f"IOP fetch failed: HTTP {rp.status_code}"}), 502
+        result = rp.json()
+        hc_data = result.get("enodeb_healthcheck_result", {})
+        if not isinstance(hc_data, dict):
+            return jsonify({"success": False, "error": "Unexpected response format"}), 502
+        hc_html = ""
+        for info_key in ("ondemand_info", "precheck_info", "postcheck_info"):
+            outputs = (hc_data.get(info_key) or {}).get("result") or []
+            if outputs:
+                out = (outputs[0].get("output") or [])
+                if out and out[0]:
+                    hc_html = out[0]
+                    break
+        if not hc_html:
+            return jsonify({"success": False,
+                            "error": f"No HTML in HC {request_id} (status: {hc_data.get('status')})"}), 502
+        return jsonify({"success": True, "html": hc_html, "request_id": request_id})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 502
+
+
 @app.route("/diagnose", methods=["POST"])
 def diagnose():
     body = request.get_json(force=True)

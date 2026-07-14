@@ -104,6 +104,15 @@
   .download-btn{padding:9px 20px;background:#1f6feb;border:none;border-radius:6px;color:#fff;font-size:.85em;font-weight:600;cursor:pointer;transition:background .2s}
   .download-btn:hover{background:#388bfd}
   .download-btn:disabled{background:#555;cursor:not-allowed}
+  .hc-list-panel{margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;overflow:hidden}
+  .hc-list-scroll{max-height:260px;overflow-y:auto}
+  .hc-list-hdr{display:flex;gap:8px;padding:6px 12px;background:var(--surface);border-bottom:1px solid var(--border);font-size:.73em;font-weight:600;color:var(--muted)}
+  .hc-list-row{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:.78em}
+  .hc-list-row:last-child{border-bottom:none}
+  .hc-list-row:hover{background:rgba(255,255,255,.03)}
+  .hc-s-done{color:var(--green)} .hc-s-pend{color:var(--orange)} .hc-s-fail{color:var(--red)}
+  .load-hc-btn{padding:3px 10px;background:#1f6feb;border:none;border-radius:4px;color:#fff;font-size:.75em;cursor:pointer;flex-shrink:0}
+  .load-hc-btn:hover{background:#388bfd}
   .api-fetch-area{padding:12px 28px;background:#0f1923;border-bottom:1px solid var(--border)}
   .api-fetch-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
   .api-field{display:flex;flex-direction:column;gap:3px}
@@ -175,9 +184,11 @@
       <label for="api-eid">Your EID</label>
       <input class="api-input" id="api-eid" placeholder="5+2 EID" style="width:110px" spellcheck="false"/>
     </div>
-    <button class="fetch-hc-btn" id="fetch-hc-btn" onclick="fetchFromApi()">&#128225; Fetch from IOP</button>
+    <button class="fetch-hc-btn" id="fetch-hc-btn" onclick="fetchFromApi()">&#128225; Run New Health Check</button>
+    <button class="fetch-hc-btn" id="view-recent-btn" onclick="loadHCList()" style="background:#2d333b;border:1px solid var(--border)">&#128203; View Recent</button>
   </div>
   <div class="fetch-status" id="fetch-status"></div>
+  <div class="hc-list-panel" id="hc-list-panel" style="display:none"></div>
 </div>
 
 <div id="hc-preview-section" style="display:none;background:var(--surface);border-bottom:1px solid var(--border)">
@@ -970,6 +981,119 @@ function fetchFromApi(){
   });
 }
 
+// ============================================================
+// IOP HC LIST
+// ============================================================
+function loadHCList(){
+  var token=(document.getElementById('api-site-token').value||'').trim();
+  if(!token){alert('Enter a site token first');return;}
+  var panel=document.getElementById('hc-list-panel');
+  var btn=document.getElementById('view-recent-btn');
+  btn.disabled=true;
+  panel.style.display='';
+  panel.innerHTML='<div class="hc-list-hdr">Loading recent health checks...</div>';
+
+  var now=new Date();
+  var end=now.toISOString().slice(0,10);
+  var start=new Date(now-7*86400000).toISOString().slice(0,10);
+
+  fetch('list-healthchecks',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({site_token:token,start_date:start,end_date:end})
+  })
+  .then(function(r){return r.json();})
+  .then(function(resp){
+    btn.disabled=false;
+    if(!resp.success){
+      panel.innerHTML='<div class="hc-list-hdr" style="color:var(--red)">Error: '+escHtml(resp.error)+'</div>';
+      return;
+    }
+    renderHCList(resp.data,panel,start,end);
+  })
+  .catch(function(err){
+    btn.disabled=false;
+    panel.innerHTML='<div class="hc-list-hdr" style="color:var(--red)">'+escHtml(err.message||err)+'</div>';
+  });
+}
+
+function _hcField(item){
+  var args=Array.prototype.slice.call(arguments,1);
+  for(var i=0;i<args.length;i++){if(item[args[i]]!=null) return String(item[args[i]]);}
+  return '';
+}
+
+function renderHCList(data,panel,start,end){
+  var items=data.enodeb_healthcheck_list||data.data||data.results||data.healthchecks||(Array.isArray(data)?data:[]);
+  if(!items.length){
+    panel.innerHTML='<div class="hc-list-hdr">No health checks found ('+(start||'?')+' – '+(end||'?')+')</div>';
+    return;
+  }
+  var rows=items.map(function(item){
+    var rid=_hcField(item,'request_id','requestId','id');
+    var status=_hcField(item,'status','statusText');
+    var rtype=_hcField(item,'req_type','reqType','type','request_type')||'On-Demand';
+    var by=_hcField(item,'created_by','createdBy','user','eid','created_user');
+    var date=_hcField(item,'created_at','createdAt','ondemandcheck_start_time','start_date','startDate','date','timestamp','created_date','request_date');
+    var disp=date.slice(0,16).replace('T',' ')||'—';
+    var sCls=/complet/i.test(status)?'hc-s-done':/fail|error/i.test(status)?'hc-s-fail':'hc-s-pend';
+    var canLoad=/complet/i.test(status);
+    return '<div class="hc-list-row">'+
+      '<span style="flex:1.5;min-width:110px">'+escHtml(disp)+'</span>'+
+      '<span style="flex:1;min-width:80px">'+escHtml(rtype)+'</span>'+
+      '<span class="'+sCls+'" style="flex:1;min-width:70px">'+escHtml(status)+'</span>'+
+      '<span style="flex:1;min-width:70px;color:var(--muted)">'+escHtml(by)+'</span>'+
+      '<span style="min-width:55px;color:var(--muted);font-family:monospace;font-size:.72em">'+escHtml(rid.slice(-8))+'</span>'+
+      (canLoad?'<button class="load-hc-btn" onclick="loadExistingHC(\''+rid.replace(/'/g,"\\'")+'\')" title="'+escHtml(rid)+'">Load</button>':'<span style="color:var(--muted);font-size:.75em;min-width:44px">'+escHtml(status)+'</span>')+
+    '</div>';
+  }).join('');
+  panel.innerHTML='<div class="hc-list-hdr">'+
+    '<span style="flex:1.5">Date/Time</span><span style="flex:1">Type</span><span style="flex:1">Status</span><span style="flex:1">Created By</span><span style="min-width:55px">ID</span><span>Action</span>'+
+  '</div>'+
+  '<div class="hc-list-scroll">'+rows+'</div>';
+}
+
+function loadExistingHC(requestId){
+  var btn=document.getElementById('fetch-hc-btn');
+  var statusEl=document.getElementById('fetch-status');
+  btn.disabled=true;
+  statusEl.style.color='var(--muted)';
+  statusEl.textContent='Loading health check '+requestId+'...';
+
+  fetch('fetch-existing-hc',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({request_id:requestId})
+  })
+  .then(function(r){return r.json();})
+  .then(function(resp){
+    btn.disabled=false;
+    if(!resp.success){
+      statusEl.style.color='var(--red)';
+      statusEl.textContent='Error: '+resp.error;
+      return;
+    }
+    statusEl.style.color='var(--green)';
+    statusEl.textContent='Health check loaded (request '+resp.request_id+'). Parsing...';
+    var blob=new Blob([resp.html],{type:'text/html'});
+    var fname='healthcheck_'+resp.request_id+'.html';
+    var file=new File([blob],fname,{type:'text/html'});
+    var dt=new DataTransfer();
+    dt.items.add(file);
+    document.getElementById('hcInput').files=dt.files;
+    hcFiles=[file];
+    document.getElementById('hcLabel').textContent=fname;
+    document.getElementById('hc-preview-frame').srcdoc=resp.html;
+    document.getElementById('hc-preview-section').style.display='';
+    processAll();
+  })
+  .catch(function(err){
+    btn.disabled=false;
+    statusEl.style.color='var(--red)';
+    statusEl.textContent='Load failed: '+(err.message||String(err));
+  });
+}
+
 function processHtmlTexts(htmlTexts){
   if(!htmlTexts.length) return;
   _cardData={};
@@ -1058,7 +1182,7 @@ function renderAll(cards){
   }).join('');
 }
 
-// Auto-fill from URL params and fetch if both provided
+// Auto-fill from URL params — pre-fill fields and show recent HCs; never auto-start a new health check
 // Link format: /rrh/?token=<site_token>&eid=<eid>
 (function(){
   var p=new URLSearchParams(location.search);
@@ -1066,7 +1190,7 @@ function renderAll(cards){
   var eid=p.get('eid')||'';
   if(token) document.getElementById('api-site-token').value=token;
   if(eid)   document.getElementById('api-eid').value=eid;
-  if(token && eid) fetchFromApi();
+  if(token) loadHCList();
 })();
 </script>
 </body>
