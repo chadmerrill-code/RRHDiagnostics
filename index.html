@@ -389,10 +389,12 @@ function parseXLSX(file,callback){
 // VENDOR DETECT
 // ============================================================
 function detectVendor(t){
-  if(/data-section=['"]cpri['"]/.test(t)||/data-section=['"]vswr['"]/.test(t)) return 'Samsung';
-  if(/data-section=['"]active-alarms['"]/.test(t)||/data-section=['"]light-level['"]/.test(t)) return 'Ericsson';
-  // IOP AMOS plain-text format
+  // IOP AMOS plain-text — check first (most specific to this market)
   if(/#{4,}\s*ALARMS\s*#{4,}/.test(t)||/Health Check Timestamp/i.test(t)||/LIGHT LEVEL INFO/i.test(t)) return 'IOP-Ericsson';
+  // Ericsson HTML (data-section markers specific to E/// format)
+  if(/data-section=['"]active-alarms['"]/.test(t)||/data-section=['"]light-level['"]/.test(t)) return 'Ericsson';
+  // Samsung HTML — must appear after Ericsson since CPRI/VSWR sections exist in both
+  if(/data-section=['"]cpri['"]/.test(t)||/data-section=['"]vswr['"]/.test(t)) return 'Samsung';
   return 'Unknown';
 }
 
