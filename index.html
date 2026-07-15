@@ -185,6 +185,17 @@
   .splash-bar-wrap{width:260px;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
   .splash-bar{height:100%;width:0%;background:var(--blue);border-radius:2px;animation:splash-fill 6s ease-out forwards}
   @keyframes splash-fill{0%{width:0%}60%{width:75%}90%{width:92%}100%{width:96%}}
+  /* AMOS HC tab log */
+  .amos-hc-wrap{display:none;border-bottom:1px solid #1f3a6e;background:#060b12}
+  .amos-hc-wrap.active{display:block}
+  .amos-hc-status{padding:7px 14px;background:#0d1f3c;color:#58a6ff;font-size:.8em;font-weight:600;font-family:monospace;border-bottom:1px solid #1f3a6e22;display:flex;align-items:center;gap:8px}
+  .amos-hc-log{padding:10px 14px;font-family:'Courier New',Courier,monospace;font-size:.79em;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;line-height:1.5;max-height:540px;overflow-y:auto}
+  .amos-hc-log .ao-cmd{color:#58a6ff;font-weight:bold}
+  .amos-hc-log .ao-err{color:#e74c3c}
+  .amos-hc-log .ao-ok{color:#2ecc71}
+  /* AMOS list entries */
+  .amos-list-section-hdr{padding:5px 10px;font-size:.72em;font-weight:700;color:#58a6ff;background:#0d1f3c;border-bottom:1px solid #1f3a6e;letter-spacing:.04em}
+  .amos-list-entry{padding:5px 10px;border-bottom:1px solid var(--border);font-size:.76em;display:flex;align-items:center;gap:10px}
 </style>
 </head>
 <body>
@@ -247,6 +258,10 @@
       <div class="results" id="results"></div>
     </div>
     <div class="right-tab-pane" id="right-pane-hc">
+      <div id="amos-hc-wrap" class="amos-hc-wrap">
+        <div class="amos-hc-status"><span id="amos-hc-dot" class="amos-dot"></span><span id="amos-hc-status-txt">AMOS Health Check</span></div>
+        <div id="amos-hc-log" class="amos-hc-log"></div>
+      </div>
       <div style="padding:0 20px 0;display:flex;flex-direction:column;height:100%">
         <div class="alarm-toggle" style="padding:8px 0;flex-shrink:0" onclick="toggleBlock('hc-preview-body',this)">
           <span>&#9660;</span> &#128196; Raw Health Check Output
@@ -1230,55 +1245,16 @@ async function runDiag(idx){
     return;
   }
 
-  // Ericsson: AMOS-first -- run health check commands, send raw output to LLM
-  _amosSess[idx]={sessionId:null,node:siteId,status:'disconnected',commands:[],stepStates:{},outputHtml:''};
-  _renderAmosPanel(idx);
-  document.getElementById('spinner-'+idx).classList.add('active');
-  document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Connecting to AMOS...';
-
-  var conn=await _amosConnectRaw(idx,siteId);
-  if(!conn.success){
-    document.getElementById('spinner-'+idx).classList.remove('active');
+  // Ericsson: use AMOS output collected by _runAmosHealthCheck
+  if(!d.amosOutput){
     document.getElementById('run-btn-'+idx).disabled=false;
-    document.getElementById('ai-result-'+idx).innerHTML='<p style="color:var(--red);margin-top:12px">&#9888; AMOS connection failed: '+escHtml(conn.error)+'</p>';
+    document.getElementById('ai-result-'+idx).innerHTML='<p style="color:var(--orange);margin-top:12px">&#9888; No AMOS data yet — health check must complete first.</p>';
     return;
   }
-
-  var diagCmds=[
-    'alt',
-    'lt all',
-    'st EUtranCellFDD|NRCellDU|EUtranCellTDD',
-    'st sect',
-    'hget sectorcarrier=* noOfMutedTxAntennas|noOfRxAntennas|noOfTxAntennas|noOfusedRxAntenna|noOfusedTxAntenna',
-    'hget ru- product|state',
-    'hget ^rilink state|linkRate|riportref|linkid',
-    'sdir',
-    'fault',
-    'mfirt',
-    'hget SfpModule=ri',
-    'hget rfport=[A-H]|freqbanddata vswr',
-    'hget nearu admin|oper|uniqueid|device|productNumber|rfportref'
-  ];
-  var rawParts=[];
-  for(var ci=0;ci<diagCmds.length;ci++){
-    var cmd=diagCmds[ci];
-    document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> AMOS: '+escHtml(cmd)+' ('+(ci+1)+'/'+diagCmds.length+')';
-    _amosLog(idx,siteId+' > '+cmd,'ao-cmd');
-    try{
-      var r=await fetch('amos-run-cmd',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({session_id:_amosSess[idx].sessionId,command:cmd})});
-      var j=await r.json();
-      if(j.output){_amosLog(idx,j.output);rawParts.push('=== '+cmd+' ===\n'+j.output);}
-      else{rawParts.push('=== '+cmd+' ===\n(no output)');}
-    }catch(err){
-      _amosLog(idx,'Error: '+(err.message||err),'ao-err');
-      rawParts.push('=== '+cmd+' ===\n[Error: '+(err.message||String(err))+']');
-    }
-  }
-
+  switchRightTab('diag');
+  document.getElementById('spinner-'+idx).classList.add('active');
   document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Sending AMOS output to LLM...';
-  var rawOutput=rawParts.join('\n\n');
-  var prompt=buildPromptFromAmosOutput(siteId,rawOutput);
+  var prompt=buildPromptFromAmosOutput(siteId,d.amosOutput);
   await _runDiagLLM(idx,prompt,'Ericsson AMOS '+siteId,d.findings);
 }
 
@@ -1825,6 +1801,7 @@ function renderAll(cards){
 // AMOS TERMINAL
 // ============================================================
 var _amosSess = {};   // idx → {sessionId, node, status, commands, stepStates, outputHtml}
+var _amosRuns = [];   // [{id, neid, ts, status}] for HC list panel
 
 function _parseSection1Commands(rawText){
   var sec1 = rawText.indexOf('## Section 2') >= 0 ? rawText.split('## Section 2')[0] : rawText;
@@ -1983,6 +1960,117 @@ async function amosCloseSession(idx){
   _renderAmosPanel(idx);
 }
 
+// ── AMOS HC tab helpers ──────────────────────────────────────────────────────
+function _amosHcClear(){
+  var el=document.getElementById('amos-hc-log'); if(el) el.innerHTML='';
+}
+function _amosHcShow(){
+  var w=document.getElementById('amos-hc-wrap'); if(w) w.classList.add('active');
+  switchRightTab('hc');
+}
+function _amosHcStatus(txt,dotState){
+  var s=document.getElementById('amos-hc-status-txt'); if(s) s.textContent=txt;
+  var dot=document.getElementById('amos-hc-dot');
+  if(dot) dot.className='amos-dot '+(dotState||'');
+}
+function _amosHcAppend(txt,cls){
+  var el=document.getElementById('amos-hc-log'); if(!el) return;
+  var d=document.createElement('div');
+  if(cls) d.className=cls;
+  d.textContent=txt;
+  el.appendChild(d);
+  el.scrollTop=el.scrollHeight;
+}
+function _addAmosListEntry(runId,neid,ts,status){
+  _amosRuns.unshift({id:runId,neid:neid,ts:ts,status:status});
+  _renderAmosListSection();
+}
+function _updateAmosListEntry(runId,status){
+  for(var i=0;i<_amosRuns.length;i++){
+    if(_amosRuns[i].id===runId){_amosRuns[i].status=status;break;}
+  }
+  _renderAmosListSection();
+}
+function _renderAmosListSection(){
+  if(!_amosRuns.length) return;
+  var panel=document.getElementById('hc-list-panel'); if(!panel) return;
+  var existing=document.getElementById('amos-runs-section');
+  var html='<div id="amos-runs-section"><div class="amos-list-section-hdr">&#9889; AMOS Runs</div>';
+  _amosRuns.forEach(function(r){
+    var sCls=r.status==='done'?'hc-s-done':r.status==='failed'?'hc-s-fail':'hc-s-pend';
+    var sLabel=r.status==='done'?'Done':r.status==='failed'?'Failed':'Running';
+    html+='<div class="amos-list-entry">'+
+      '<span class="hc-status-badge '+sCls+'" style="min-width:60px;text-align:center">'+escHtml(sLabel)+'</span>'+
+      '<span style="font-family:monospace;flex:1">'+escHtml(r.neid)+'</span>'+
+      '<span style="color:var(--muted);flex-shrink:0">'+escHtml(r.ts)+'</span>'+
+    '</div>';
+  });
+  html+='</div>';
+  if(existing){ existing.outerHTML=html; }
+  else { panel.insertAdjacentHTML('afterbegin',html); }
+}
+
+async function _runAmosHealthCheck(idx){
+  var d=_cardData[idx]; if(!d) return;
+  var siteId=d.siteId;
+  var ts=new Date().toLocaleTimeString();
+  var runId='amos-'+Date.now();
+
+  _amosHcClear();
+  _amosHcShow();
+  _amosHcStatus('Connecting to '+siteId+'...','busy');
+  _amosHcAppend('Connecting to '+siteId+' via ENM...','ao-cmd');
+
+  var runBtn=document.getElementById('run-btn-'+idx);
+  if(runBtn){runBtn.disabled=true;runBtn.textContent='⏳ AMOS Running...';}
+  _addAmosListEntry(runId,siteId,ts,'running');
+
+  _amosSess[idx]={sessionId:null,node:siteId,status:'disconnected',commands:[],stepStates:{},outputHtml:''};
+
+  var conn=await _amosConnectRaw(idx,siteId);
+  if(!conn.success){
+    _amosHcAppend('Connection failed: '+conn.error,'ao-err');
+    _amosHcStatus('Connection failed','err');
+    _updateAmosListEntry(runId,'failed');
+    if(runBtn){runBtn.disabled=false;runBtn.textContent='▶  Run AI Diagnosis';}
+    return;
+  }
+
+  _amosHcAppend('Session '+_amosSess[idx].sessionId+' ready','ao-ok');
+
+  var diagCmds=[
+    'alt','lt all','st EUtranCellFDD|NRCellDU|EUtranCellTDD','st sect',
+    'hget sectorcarrier=* noOfMutedTxAntennas|noOfRxAntennas|noOfTxAntennas|noOfusedRxAntenna|noOfusedTxAntenna',
+    'hget ru- product|state','hget ^rilink state|linkRate|riportref|linkid',
+    'sdir','fault','mfirt','hget SfpModule=ri',
+    'hget rfport=[A-H]|freqbanddata vswr',
+    'hget nearu admin|oper|uniqueid|device|productNumber|rfportref'
+  ];
+  var rawParts=[];
+
+  for(var ci=0;ci<diagCmds.length;ci++){
+    var cmd=diagCmds[ci];
+    _amosHcStatus('Running ('+(ci+1)+'/'+diagCmds.length+'): '+cmd,'busy');
+    _amosHcAppend(siteId+' > '+cmd,'ao-cmd');
+    try{
+      var r=await fetch('amos-run-cmd',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({session_id:_amosSess[idx].sessionId,command:cmd})});
+      var j=await r.json();
+      if(j.output){_amosHcAppend(j.output);rawParts.push('=== '+cmd+' ==='+String.fromCharCode(10)+j.output);}
+      else rawParts.push('=== '+cmd+' ===(no output)');
+    }catch(err){
+      _amosHcAppend('Error: '+(err.message||err),'ao-err');
+      rawParts.push('=== '+cmd+' ===[Error: '+(err.message||String(err))+']');
+    }
+  }
+
+  var NL2=String.fromCharCode(10)+String.fromCharCode(10);
+  d.amosOutput=rawParts.join(NL2);
+  _amosHcStatus('Health check complete — click “Run AI Diagnosis” to analyze','ok');
+  _updateAmosListEntry(runId,'done');
+  if(runBtn){runBtn.disabled=false;runBtn.textContent='▶  Run AI Diagnosis';}
+}
+
 function _launchFromNeid(neid){
   var findings={
     archetype:'AMOS_CHECK', label:'AMOS Live Check', dispatchWarranted:false,
@@ -1993,8 +2081,7 @@ function _launchFromNeid(neid){
   _cardData={};
   _cardData[0]={vendor:'Ericsson', siteId:neid, hc:{}, findings:findings, swRows:[]};
   document.getElementById('results').innerHTML=renderCard('Ericsson',neid,{},findings,[],0);
-  switchRightTab('diag');
-  setTimeout(function(){ runDiag(0); }, 200);
+  setTimeout(function(){ _runAmosHealthCheck(0); }, 200);
 }
 
 // Auto-fill from URL params — pre-fill fields, launch AMOS diagnosis if neid= provided
