@@ -1259,21 +1259,16 @@ async function runDiag(idx){
       var r=await fetch('amos-run-cmd',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({session_id:_amosSess[idx].sessionId,command:cmd})});
       var j=await r.json();
-      if(j.output){_amosLog(idx,j.output);rawParts.push('=== '+cmd+' ===
-'+j.output);}
-      else{rawParts.push('=== '+cmd+' ===
-(no output)');}
+      if(j.output){_amosLog(idx,j.output);rawParts.push('=== '+cmd+' ===\n'+j.output);}
+      else{rawParts.push('=== '+cmd+' ===\n(no output)');}
     }catch(err){
       _amosLog(idx,'Error: '+(err.message||err),'ao-err');
-      rawParts.push('=== '+cmd+' ===
-[Error: '+(err.message||String(err))+']');
+      rawParts.push('=== '+cmd+' ===\n[Error: '+(err.message||String(err))+']');
     }
   }
 
   document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Sending AMOS output to LLM...';
-  var rawOutput=rawParts.join('
-
-');
+  var rawOutput=rawParts.join('\n\n');
   var prompt=buildPromptFromAmosOutput(siteId,rawOutput);
   await _runDiagLLM(idx,prompt,'Ericsson AMOS '+siteId,d.findings);
 }
@@ -1302,44 +1297,31 @@ async function _amosConnectRaw(idx,node){
 }
 
 function buildPromptFromAmosOutput(neid,rawOutput){
-  return 'You are an Ericsson 5G/4G RAN NOC engineer at Verizon Wireless analyzing a node that is Out Of Service (OOS).
-
-'+
-    'Node: '+neid+'
-
-'+
-    'AMOS Health Check Output (raw session output):
-'+
-    rawOutput.slice(0,12000)+'
-
-'+
-    'Respond with exactly two sections:
-
-'+
-    '## Section 1 -- Remote Troubleshooting Steps
-'+
-    'Numbered steps the NOC technician can attempt remotely via AMOS. For each step use exactly these labels:
-'+
-    '* Command: <exact AMOS/ENM command>
-'+
-    '* Pass Criteria: <what normal output looks like>
-'+
-    '* Fail Action: <what to do if abnormal>
-'+
-    '* End: <next step or escalation>
-'+
-    'Prioritize steps based on the fault evidence in the output above. End the last step with: "If all remote steps fail, proceed to Section 2."
-
-'+
-    '## Section 2 -- Dispatch Instructions
-'+
-    'State clearly: DISPATCH WARRANTED -- Yes / No / Pending (exhaust remote first).
-'+
-    'If yes: specific scope of work for the field technician referencing exact fault evidence (port IDs, FRU/PN/SN, link IDs).
-'+
-    'If no or pending: which remote steps must succeed first.
-'+
-    'Be concise (3-5 steps per task).';
+  var NL=String.fromCharCode(10);
+  var p=[];
+  p.push('You are an Ericsson 5G/4G RAN NOC engineer at Verizon Wireless analyzing a node that is Out Of Service (OOS).');
+  p.push('');
+  p.push('Node: '+neid);
+  p.push('');
+  p.push('AMOS Health Check Output (raw session output):');
+  p.push(rawOutput.slice(0,12000));
+  p.push('');
+  p.push('Respond with exactly two sections:');
+  p.push('');
+  p.push('## Section 1 -- Remote Troubleshooting Steps');
+  p.push('Numbered steps the NOC technician can attempt remotely via AMOS. For each step use exactly these labels:');
+  p.push('* Command: <exact AMOS/ENM command>');
+  p.push('* Pass Criteria: <what normal output looks like>');
+  p.push('* Fail Action: <what to do if abnormal>');
+  p.push('* End: <next step or escalation>');
+  p.push('Prioritize steps based on the fault evidence in the output above. End the last step with: "If all remote steps fail, proceed to Section 2."');
+  p.push('');
+  p.push('## Section 2 -- Dispatch Instructions');
+  p.push('State clearly: DISPATCH WARRANTED -- Yes / No / Pending (exhaust remote first).');
+  p.push('If yes: specific scope of work referencing exact fault evidence (port IDs, FRU/PN/SN, link IDs).');
+  p.push('If no or pending: which remote steps must succeed first.');
+  p.push('Be concise (3-5 steps per task).');
+  return p.join(NL);
 }
 
 async function _runDiagLLM(idx,prompt,context,findings){
