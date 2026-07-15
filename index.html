@@ -882,13 +882,13 @@ function buildSummary(siteId,vendor,f){
 // LLM PROMPT BUILDERS
 // ============================================================
 function buildPromptEricsson(siteId,f,swRows,hc){
-  var hwLines=f.hwDetails.filter(function(h){return h.fru||h.sn})
+  var hwLines=(f.hwDetails||[]).filter(function(h){return h.fru||h.sn})
     .map(function(h){return '  FRU='+h.fru+' PN='+h.pn+' SN='+h.sn}).join('\n')||'  None';
-  var nokLines=f.nokLinks.map(function(li){return '  '+li.text.substring(0,80)}).join('\n')||'  None';
-  var riLines=f.rilinks.map(function(r){return '  RiLink='+r.id+' Port='+r.port}).join('\n')||'  None';
-  var cellLines=f.disabledCells.map(function(c){return '  '+c.identifier}).join('\n')||'  None';
-  var radioLines=f.disabledRadios.map(function(r){return '  '+r.identifier}).join('\n')||'  None';
-  var pimLines=f.pimHigh.map(function(p){return '  '+(p['ENB_SEC_CAR']||'?')+': '+p.flag}).join('\n')||'  None';
+  var nokLines=(f.nokLinks||[]).map(function(li){return '  '+li.text.substring(0,80)}).join('\n')||'  None';
+  var riLines=(f.riLinks||[]).map(function(r){return '  RiLink='+r.id+' Port='+r.port}).join('\n')||'  None';
+  var cellLines=(f.disabledCells||[]).map(function(c){return '  '+c.identifier}).join('\n')||'  None';
+  var radioLines=(f.disabledRadios||[]).map(function(r){return '  '+r.identifier}).join('\n')||'  None';
+  var pimLines=(f.pimHigh||[]).map(function(p){return '  '+(p['ENB_SEC_CAR']||'?')+': '+p.flag}).join('\n')||'  None';
   var swLines=swRows.slice(0,3).map(function(r){return (r['Severity']||'')+' '+(String(r['Description']||'')).substring(0,60)}).join('; ')||'None';
   var rawAlarmBlock='';
   if(hc&&hc['active-alarms']&&hc['active-alarms'].length){
@@ -1189,8 +1189,12 @@ var _cardData={};
 function viewPrompt(idx, btn){
   var d=_cardData[idx]; if(!d) return;
   var text;
-  try{ text=d.vendor==='Samsung'?buildPromptSamsung(d.siteId,d.findings,d.swRows):buildPromptEricsson(d.siteId,d.findings,d.swRows); }
-  catch(e){ text='Error building prompt: '+e; }
+  if(Object.keys(d.hc||{}).length===0){
+    text='AMOS-first mode — prompt is built at runtime from live AMOS output, not a static template.';
+  } else {
+    try{ text=d.vendor==='Samsung'?buildPromptSamsung(d.siteId,d.findings,d.swRows,d.hc):buildPromptEricsson(d.siteId,d.findings,d.swRows,d.hc); }
+    catch(e){ text='Error building prompt: '+e; }
+  }
   var pop=document.getElementById('prompt-pop-'+idx);
   if(text.length>600){
     // large prompt → download
