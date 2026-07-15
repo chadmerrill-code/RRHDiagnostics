@@ -218,6 +218,11 @@
       <label for="api-eid">Your EID</label>
       <input class="api-input" id="api-eid" placeholder="5+2 EID" style="width:100px" spellcheck="false"/>
     </div>
+    <div class="api-field">
+      <label for="api-neid">Node ID (eNodeB)</label>
+      <input class="api-input" id="api-neid" placeholder="e.g. 1686007" style="width:110px" spellcheck="false"/>
+    </div>
+    <button class="fetch-hc-btn" style="background:#1a3a1a;border:1px solid #2ecc71;color:#2ecc71" onclick="_launchFromNeid((document.getElementById('api-neid').value||'').trim())||0">&#128225; Run AMOS</button>
     <button class="fetch-hc-btn" id="fetch-hc-btn" onclick="fetchFromApi()">&#128225; Run New HC</button>
     <button class="fetch-hc-btn" id="view-recent-btn" onclick="loadHCList()" style="background:#2d333b;border:1px solid var(--border)">&#128203; View Recent</button>
     <div class="fetch-status" id="fetch-status"></div>
@@ -1975,11 +1980,11 @@ async function amosCloseSession(idx){
 }
 
 function _launchFromNeid(neid){
-  // Create a minimal Ericsson card and auto-run AMOS-first diagnosis
   var findings={
     archetype:'AMOS_CHECK', label:'AMOS Live Check', dispatchWarranted:false,
     disabledCells:[], disabledRadios:[], nokLinks:[], riLinks:[],
-    pimHigh:[], noisyBranches:[], hwFrus:[], swAlarms:[]
+    pimHigh:[], noisyBranches:[], hwFrus:[], hwDetails:[], swAlarms:[],
+    cpriFail:[], vswr_fail:[], badOptical:[], rssiHigh:[]
   };
   _cardData={};
   _cardData[0]={vendor:'Ericsson', siteId:neid, hc:{}, findings:findings, swRows:[]};
@@ -1995,12 +2000,13 @@ function _launchFromNeid(neid){
   var neid=p.get('neid')||'';
   var token=p.get('token')||p.get('site_token')||'';
   var eid=p.get('eid')||'';
+  if(token) document.getElementById('api-site-token').value=token;
+  if(eid)   document.getElementById('api-eid').value=eid;
   if(neid){
+    document.getElementById('api-neid').value=neid.trim();
     _launchFromNeid(neid.trim());
-  } else {
-    if(token) document.getElementById('api-site-token').value=token;
-    if(eid)   document.getElementById('api-eid').value=eid;
-    if(token) loadHCList();
+  } else if(token) {
+    loadHCList();
   }
   // restore saved font size
   var sel=document.getElementById('hc-font-select');
