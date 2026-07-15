@@ -1321,13 +1321,13 @@ function setHcFontSize(px){
   if(_hcHtml) _setHcFrame(_hcHtml);
 }
 
-function _loadHCHtml(html, requestId){
+function _loadHCHtml(html, requestId, neid){
   var fname='EnodebHealthCheck_'+requestId+'.html';
   hcFiles=[new File([new Blob([html],{type:'text/html'})],fname,{type:'text/html'})];
   document.getElementById('hcLabel').textContent=fname;
   _setHcFrame(html);
   switchRightTab('diag');
-  processHtmlTexts([html]);
+  processHtmlTexts([html], neid ? [neid] : null);
 }
 
 async function fetchFromApi(){
@@ -1475,6 +1475,7 @@ function renderHCList(data,panel,start,end){
     var rtype=_hcField(item,'req_type','reqType','type','request_type')||'On-Demand';
     var status=_hcField(item,'status','statusText');
     var enodebs=_hcEnodebs(item);
+    var firstNeid=enodebs.split(',')[0].trim()||'';
     var ip=_hcField(item,'ip_address','ip','ipAddress')||'—';
     var email=_hcField(item,'email_id','email','emailId','email_address')||'—';
     var by=_hcField(item,'created_by','createdBy','user','eid','created_user');
@@ -1490,7 +1491,7 @@ function renderHCList(data,panel,start,end){
       col(130,escHtml(enodebs),'flex:1;min-width:130px')+
       col(120,escHtml(by))+
       col(150,escHtml(createdOn))+
-      (canLoad?'<button class="load-hc-btn" onclick="loadExistingHC(\''+rid.replace(/'/g,"\\'")+'\')">Load</button>':
+      (canLoad?'<button class="load-hc-btn" onclick="loadExistingHC(\''+rid.replace(/'/g,"\\'")+'\',\''+firstNeid.replace(/'/g,"\\'")+'\')">Load</button>':
                '<span style="color:var(--muted);font-size:.75em;min-width:44px">'+escHtml(status)+'</span>')+
     '</div>';
   }).join('');
@@ -1505,7 +1506,7 @@ function renderHCList(data,panel,start,end){
   '</div>';
 }
 
-function loadExistingHC(requestId){
+function loadExistingHC(requestId, neid){
   var btn=document.getElementById('fetch-hc-btn');
   var statusEl=document.getElementById('fetch-status');
   btn.disabled=true;
@@ -1526,7 +1527,7 @@ function loadExistingHC(requestId){
       return;
     }
     _setFetchStatus(statusEl,'⌛ Loaded #'+resp.request_id+' — parsing...','var(--muted)');
-    _loadHCHtml(resp.html, resp.request_id);
+    _loadHCHtml(resp.html, resp.request_id, neid);
   })
   .catch(function(err){
     btn.disabled=false;
@@ -1535,7 +1536,7 @@ function loadExistingHC(requestId){
   });
 }
 
-function processHtmlTexts(htmlTexts){
+function processHtmlTexts(htmlTexts, neids){
   if(!htmlTexts.length) return;
   _cardData={};
   var _pst=document.getElementById('fetch-status');
@@ -1555,7 +1556,7 @@ function processHtmlTexts(htmlTexts){
         var vendor=detectVendor(htmlText);
         if(_pst) _setFetchStatus(_pst,'🔬 Step 2 — '+(vendor==='Unknown'?'Parsing (IOP format detected)...':'Parsing '+vendor+' health check...'),'var(--muted)');
         var hc=vendor==='Samsung'?parseSamsung(htmlText):(vendor==='Ericsson'?parseEricsson(htmlText):parseIOPEricsson(htmlText));
-        var siteId=hc['_site_id']||'UNKNOWN';
+        var siteId=(neids&&neids[idx])||hc['_site_id']||'UNKNOWN';
         if(_pst) _setFetchStatus(_pst,'🧠 Step 3 — Classifying fault archetype for site '+siteId+'...','var(--muted)');
         var resolvedVendor=hc['_vendor']||vendor;
         var filtered=filterAlarms(swData,siteId);

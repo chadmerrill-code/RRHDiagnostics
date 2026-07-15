@@ -523,7 +523,11 @@ def pdf():
 AMOS_DIRECT_HOST = "10.216.230.154"
 AMOS_DIRECT_PORT = 22
 AMOS_DIRECT_USER = "ctchgrp"
-AMOS_KEY_FILE    = r"C:\Users\merch79\Documents\TicketTracker\data\amos_identity"
+_AMOS_KEY_CANDIDATES = [
+    r"C:\TicketTracker\data\amos_identity",
+    r"C:\Users\merch79\Documents\TicketTracker\data\amos_identity",
+]
+AMOS_KEY_FILE = next((p for p in _AMOS_KEY_CANDIDATES if os.path.isfile(p)), _AMOS_KEY_CANDIDATES[0])
 AMOS_KEY_PASS    = ""    # key passphrase if set (check amos_key_passphrase in TicketTracker settings)
 AMOS_CMD_TIMEOUT = 90    # seconds to wait for command output
 
