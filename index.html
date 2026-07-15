@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -94,6 +94,12 @@
   .md-render blockquote{border-left:3px solid var(--border);padding-left:10px;color:var(--muted);margin:6px 0}
   .checkbox-item{display:flex;gap:8px;margin:4px 0;align-items:flex-start}
   .checkbox-item .cb{width:14px;height:14px;border:1px solid var(--muted);border-radius:2px;flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center;font-size:9px}
+  .ai-step-row{display:flex;align-items:baseline;gap:7px;margin:2px 0;padding:3px 7px;border-radius:3px;font-size:.88em}
+  .ai-step-key{font-size:.7em;font-weight:700;min-width:90px;text-transform:uppercase;letter-spacing:.04em;flex-shrink:0;padding-top:1px}
+  .ai-key-cmd{background:#0d1f3c}.ai-key-cmd .ai-step-key{color:#58a6ff}
+  .ai-key-pass{background:#071a0f}.ai-key-pass .ai-step-key{color:#2ecc71}
+  .ai-key-fail{background:#1a0707}.ai-key-fail .ai-step-key{color:#e74c3c}
+  .ai-key-end{background:#1a1a07}.ai-key-end .ai-step-key{color:#f1c40f}
   .checkbox-item .cb.checked{background:var(--green);border-color:var(--green);color:#000}
   .debug-toggle{cursor:pointer;font-size:.8em;color:var(--muted);padding:6px 20px;display:inline-flex;align-items:center;gap:6px;border-bottom:1px solid var(--border)}
   .debug-block{display:none;padding:12px 20px}
@@ -286,6 +292,13 @@ function renderMarkdown(md){
       continue;
     }
     if(/^[-*_]{3,}$/.test(l.trim())){out.push('<hr/>');continue;}
+    var stepMatch=l.match(/^\*\s*(Command|Pass Criteria|Pass|Fail Action|Fail|End)\s*:\s*(.*)/i);
+    if(stepMatch){
+      var sk=stepMatch[1],sv=stepMatch[2];
+      var skCls=/command/i.test(sk)?'ai-key-cmd':/^pass/i.test(sk)?'ai-key-pass':/fail/i.test(sk)?'ai-key-fail':'ai-key-end';
+      out.push('<div class="ai-step-row '+skCls+'"><span class="ai-step-key">'+escHtml(sk)+'</span><span class="ai-step-val">'+inlineMarkdown(sv)+'</span></div>');
+      continue;
+    }
     if(/^###/.test(l)){out.push('<h3>'+inlineMarkdown(l.replace(/^#+\s*/,''))+'</h3>');continue;}
     if(/^##/.test(l)){out.push('<h2>'+inlineMarkdown(l.replace(/^#+\s*/,''))+'</h2>');continue;}
     if(/^#/.test(l)){out.push('<h2>'+inlineMarkdown(l.replace(/^#+\s*/,''))+'</h2>');continue;}
@@ -863,7 +876,7 @@ function buildSummary(siteId,vendor,f){
 // ============================================================
 // LLM PROMPT BUILDERS
 // ============================================================
-function buildPromptEricsson(siteId,f,swRows){
+function buildPromptEricsson(siteId,f,swRows,hc){
   var hwLines=f.hwDetails.filter(function(h){return h.fru||h.sn})
     .map(function(h){return '  FRU='+h.fru+' PN='+h.pn+' SN='+h.sn}).join('\n')||'  None';
   var nokLines=f.nokLinks.map(function(li){return '  '+li.text.substring(0,80)}).join('\n')||'  None';
@@ -872,16 +885,51 @@ function buildPromptEricsson(siteId,f,swRows){
   var radioLines=f.disabledRadios.map(function(r){return '  '+r.identifier}).join('\n')||'  None';
   var pimLines=f.pimHigh.map(function(p){return '  '+(p['ENB_SEC_CAR']||'?')+': '+p.flag}).join('\n')||'  None';
   var swLines=swRows.slice(0,3).map(function(r){return (r['Severity']||'')+' '+(String(r['Description']||'')).substring(0,60)}).join('; ')||'None';
-  return 'Ericsson RAN NOC expert. Site '+siteId+'. Archetype '+f.archetype+' ('+f.label+'). '+(f.dispatchWarranted?'DISPATCH WARRANTED':'TRY REMOTE FIRST')+'.\n\n'+
-    'KEY FACTS (use these exact IDs):\nDisabled cells: '+cellLines+'\nDisabled radios: '+radioLines+
-    '\nNOK fronthaul links: '+nokLines+'\nRiLink faults: '+riLines+
-    '\nHardware (FRU/PN/SN): '+hwLines+'\nPIM flags: '+pimLines+'\nSwitch alarms: '+swLines+
-    '\n\nENM COMMANDS: st EUtranCellFDD | sdir | hget ^rilink state | acc FieldReplaceableUnit=<ID> restartunit | set EUtranCellFDD=<ID> administrativeState LOCKED/UNLOCKED | mfirt\n\n'+
-    'Produce exactly:\n## Section 1 — Remote Troubleshooting Steps\nNumbered steps with exact ENM commands. Pass criteria. Fail action. End: "If all remote steps fail -> Section 2."\n\n'+
-    '## Section 2 — Precise Dispatch Instructions\nPREREQUISITE: Exhaust Section 1 first.\nTASK A (fiber/SFP): port IDs, fiber scope, SFP swap, OMC validation.\nTASK B (RRH replacement): FRU/PN/SN above, LOTO, swap, OMC validation.\nBe concise.';
+  var rawAlarmBlock='';
+  if(hc&&hc['active-alarms']&&hc['active-alarms'].length){
+    var alarmLines=hc['active-alarms'].slice(0,15).map(function(a){
+      return '  '+(a._alarm_name?'['+( a._severity||'?')+'] '+a._alarm_name+(a._mo?' MO='+a._mo:''):a.text.substring(0,100));
+    });
+    rawAlarmBlock='\n\nACTIVE ALARMS FROM HEALTH CHECK ('+hc['active-alarms'].length+' total):\n'+alarmLines.join('\n');
+  }
+  var archetypeNote=f.archetype==='UNKNOWN'
+    ?'No specific fault pattern detected in health check -- use Section 1 to assess from scratch.'
+    :'Fault archetype: '+f.archetype+' ('+f.label+').';
+  return 'You are an Ericsson RAN NOC engineer at Verizon Wireless. Node '+siteId+' is OOS.\n'+
+    archetypeNote+' '+(f.dispatchWarranted?'Hard fault confirmed -- dispatch likely needed.':'Attempt remote remediation first.')+'\n\n'+
+    'PARSED FAULT DATA (exact IDs for ENM commands):\n'+
+    'Disabled cells:\n'+cellLines+'\n'+
+    'Disabled radios:\n'+radioLines+'\n'+
+    'NOK fronthaul links:\n'+nokLines+'\n'+
+    'RiLink faults:\n'+riLines+'\n'+
+    'Hardware (FRU/PN/SN):\n'+hwLines+'\n'+
+    'PIM indicators:\n'+pimLines+'\n'+
+    'Switch alarms: '+swLines+
+    rawAlarmBlock+'\n\n'+
+    'AVAILABLE ENM COMMANDS:\n'+
+    '  alt                                          -- list all active alarms (run first)\n'+
+    '  st EUtranCellFDD                             -- check cell operational/admin state\n'+
+    '  sdir                                         -- show RRH connections and link state\n'+
+    '  hget ^rilink state                           -- check fronthaul (RiLink) states\n'+
+    '  acc FieldReplaceableUnit=<ID> restartunit    -- restart a specific RRH/FRU\n'+
+    '  set EUtranCellFDD=<ID> administrativeState LOCKED/UNLOCKED -- lock or unlock a cell\n'+
+    '  mfirt                                        -- display FRU inventory (FRU/PN/SN)\n\n'+
+    'Respond with exactly:\n\n'+
+    '## Section 1 -- Remote Troubleshooting Steps\n'+
+    'Numbered steps. For each step use exactly these labels:\n'+
+    '* Command: <exact ENM command>\n'+
+    '* Pass Criteria: <what normal output looks like>\n'+
+    '* Fail Action: <what to do if abnormal>\n'+
+    '* End: <next step or escalation>\n'+
+    'Start with alt to check current alarm state. End last step with: "If all remote steps fail, proceed to Section 2."\n\n'+
+    '## Section 2 -- Dispatch Instructions\n'+
+    'State: DISPATCH WARRANTED -- Yes / No / Pending\n'+
+    'PREREQUISITE: Exhaust Section 1 first.\n'+
+    'TASK A (fronthaul/fiber/SFP): specific port IDs, fiber inspection steps, SFP swap, OMC validation.\n'+
+    'TASK B (RRH replacement): FRU/PN/SN from above, LOTO, swap, OMC validation.\n'+
+    'Be concise (3-5 steps per task).';
 }
-
-function buildPromptSamsung(siteId,f,swRows){
+function buildPromptSamsung(siteId,f,swRows,hc){
   var dcLines=f.disabledCells.map(function(c){return 'Cell '+(c['CELLNUM']||c.text||'?')}).join('; ')||'None';
   var cpriLines=f.cpriFail.map(function(a){return a['LOCATION']||''}).join('; ')||'None';
   var sfpLines=f.failingSfps.map(function(s){
@@ -892,15 +940,49 @@ function buildPromptSamsung(siteId,f,swRows){
   var optLines=f.badOptical.map(function(o){return o.unit_id+' Rx='+o.rx_power_dBm+'dBm'}).join('; ')||'None';
   var rssiLines=f.rssiHigh.map(function(r){return 'Cell='+(r['CELL NUMBER']||'?')+' RSSI='+(r['RSSI Average']||'?')+'dBm'}).join('; ')||'None';
   var swLines=swRows.slice(0,3).map(function(r){return (r['Severity']||'')+' '+(String(r['Description']||'')).substring(0,60)}).join('; ')||'None';
-  return 'Samsung RAN NOC expert. Site '+siteId+'. Archetype '+f.archetype+' ('+f.label+'). '+(f.dispatchWarranted?'DISPATCH WARRANTED':'TRY REMOTE FIRST')+'.\n\n'+
-    'KEY FACTS (use these exact IDs):\nDisabled cells: '+dcLines+'\nDisabled radios: '+drLines+
-    '\nCPRI failures: '+cpriLines+'\nBad optical Rx (<-35 dBm): '+optLines+
-    '\nFailing SFP details:\n'+sfpLines+'\nVSWR failures: '+vsLines+
-    '\nRSSI high (PIM, >-85 dBm): '+rssiLines+'\nSwitch alarms: '+swLines+
-    '\n\nSAMSUNG CLI COMMANDS: dis-alarm: severity=all | dis-cpri-port | dis-cell: cellId=<N> | bls-cell: cellId=<N> | ubl-cell: cellId=<N> | init-pcb: rackId=0,shelfId=0,slotId=<N>\n\n'+
-    'Produce exactly:\n## Section 1 — Remote Troubleshooting Steps\n4 steps. Pass criteria and fail action per step. End: "If remote fails or FAULTY_DISCONNECTED -> Section 2."\n\n'+
-    '## Section 2 — Precise Dispatch Instructions\nOpen: "REMOTE TROUBLESHOOTING EXHAUSTED — TARGET NODE: '+siteId+'"\n'+
-    'TASK A: [SAMSUNG CPRI/eCPRI LINK DOWN WORK ORDER]\n  [ ] 1-5 steps using SFP details above\nTASK B: [SAMSUNG HARDWARE UNIT REPLACE WORK ORDER]\n  [ ] 1-5 steps using unit details above\nBe concise.';
+  var rawAlarmBlock='';
+  if(hc&&hc['_alarms']&&hc['_alarms'].length){
+    var alarmLines=hc['_alarms'].slice(0,15).map(function(a){
+      return '  ['+( a['SEVERITY']||'?')+'] '+(a['SPECIFIC PROBLEM']||a['DESCRIPTION']||'').substring(0,80)+' Loc='+(a['LOCATION']||'?');
+    });
+    rawAlarmBlock='\n\nACTIVE ALARMS FROM HEALTH CHECK ('+hc['_alarms'].length+' total):\n'+alarmLines.join('\n');
+  }
+  var archetypeNote=f.archetype==='UNKNOWN'
+    ?'No specific fault pattern detected -- use Section 1 to assess from scratch.'
+    :'Fault archetype: '+f.archetype+' ('+f.label+').';
+  return 'You are a Samsung RAN NOC engineer at Verizon Wireless. Node '+siteId+' is OOS.\n'+
+    archetypeNote+' '+(f.dispatchWarranted?'Hard fault confirmed -- dispatch likely needed.':'Attempt remote remediation first.')+'\n\n'+
+    'PARSED FAULT DATA (exact IDs for CLI commands):\n'+
+    'Disabled cells: '+dcLines+'\n'+
+    'Disabled radios: '+drLines+'\n'+
+    'CPRI failures: '+cpriLines+'\n'+
+    'Bad optical Rx (<-35 dBm): '+optLines+'\n'+
+    'Failing SFP details:\n'+sfpLines+'\n'+
+    'VSWR failures: '+vsLines+'\n'+
+    'RSSI high (PIM, >-85 dBm): '+rssiLines+'\n'+
+    'Switch alarms: '+swLines+
+    rawAlarmBlock+'\n\n'+
+    'AVAILABLE SAMSUNG CLI COMMANDS:\n'+
+    '  dis-alarm: severity=all         -- list all active alarms (run first)\n'+
+    '  dis-cpri-port                   -- show CPRI port status\n'+
+    '  dis-cell: cellId=<N>            -- show cell state\n'+
+    '  bls-cell: cellId=<N>            -- block (lock) a cell\n'+
+    '  ubl-cell: cellId=<N>            -- unblock (unlock) a cell\n'+
+    '  init-pcb: rackId=0,shelfId=0,slotId=<N> -- reset a board/unit\n\n'+
+    'Respond with exactly:\n\n'+
+    '## Section 1 -- Remote Troubleshooting Steps\n'+
+    'Numbered steps. For each step use exactly these labels:\n'+
+    '* Command: <exact CLI command>\n'+
+    '* Pass Criteria: <what normal output looks like>\n'+
+    '* Fail Action: <what to do if abnormal>\n'+
+    '* End: <next step or escalation>\n'+
+    'Start with dis-alarm to check current alarm state. End last step with: "If remote fails or FAULTY_DISCONNECTED, proceed to Section 2."\n\n'+
+    '## Section 2 -- Dispatch Instructions\n'+
+    'Open: "REMOTE TROUBLESHOOTING EXHAUSTED -- TARGET NODE: '+siteId+'"\n'+
+    'State: DISPATCH WARRANTED -- Yes / No / Pending\n'+
+    'TASK A (CPRI/eCPRI link down): SFP details above, inspection steps, swap, OMC validation.\n'+
+    'TASK B (hardware unit replace): unit/board details above, LOTO, swap, OMC validation.\n'+
+    'Be concise (3-5 steps per task).';
 }
 
 // ============================================================
@@ -1125,7 +1207,7 @@ function viewPrompt(idx, btn){
 function runDiag(idx){
   var d=_cardData[idx];if(!d) return;
   var siteId=d.siteId, vendor=d.vendor;
-  var prompt=vendor==='Samsung'?buildPromptSamsung(siteId,d.findings,d.swRows):buildPromptEricsson(siteId,d.findings,d.swRows);
+  var prompt=vendor==='Samsung'?buildPromptSamsung(siteId,d.findings,d.swRows,d.hc):buildPromptEricsson(siteId,d.findings,d.swRows,d.hc);
   var context=vendor+' '+d.findings.label;
 
   document.getElementById('run-btn-'+idx).disabled=true;
@@ -1321,13 +1403,18 @@ function setHcFontSize(px){
   if(_hcHtml) _setHcFrame(_hcHtml);
 }
 
-function _loadHCHtml(html, requestId, neid){
+function _loadHCHtml(html, requestId, neidsStr){
   var fname='EnodebHealthCheck_'+requestId+'.html';
-  hcFiles=[new File([new Blob([html],{type:'text/html'})],fname,{type:'text/html'})];
-  document.getElementById('hcLabel').textContent=fname;
+  var neids=neidsStr ? neidsStr.split(',').map(function(n){return n.trim();}).filter(Boolean) : null;
+  var htmlArr=neids&&neids.length>1 ? neids.map(function(){return html;}) : [html];
+  hcFiles=htmlArr.map(function(h,i){
+    var n=neids&&neids[i]?'_'+neids[i]:'';
+    return new File([new Blob([h],{type:'text/html'})],'EnodebHealthCheck_'+requestId+n+'.html',{type:'text/html'});
+  });
+  document.getElementById('hcLabel').textContent=fname+(neids&&neids.length>1?' ('+neids.length+' nodes)':'');
   _setHcFrame(html);
   switchRightTab('diag');
-  processHtmlTexts([html], neid ? [neid] : null);
+  processHtmlTexts(htmlArr, neids&&neids.length ? neids : null);
 }
 
 async function fetchFromApi(){
@@ -1475,7 +1562,6 @@ function renderHCList(data,panel,start,end){
     var rtype=_hcField(item,'req_type','reqType','type','request_type')||'On-Demand';
     var status=_hcField(item,'status','statusText');
     var enodebs=_hcEnodebs(item);
-    var firstNeid=enodebs.split(',')[0].trim()||'';
     var ip=_hcField(item,'ip_address','ip','ipAddress')||'—';
     var email=_hcField(item,'email_id','email','emailId','email_address')||'—';
     var by=_hcField(item,'created_by','createdBy','user','eid','created_user');
@@ -1561,7 +1647,7 @@ function processHtmlTexts(htmlTexts, neids){
         var resolvedVendor=hc['_vendor']||vendor;
         var filtered=filterAlarms(swData,siteId);
         var findings=resolvedVendor==='Samsung'?classifySamsung(hc):classifyEricsson(hc);
-        _cardData[idx]={vendor:resolvedVendor,siteId,findings,swRows:filtered};
+        _cardData[idx]={vendor:resolvedVendor,siteId,hc,findings,swRows:filtered};
         cards[idx]={vendor:resolvedVendor,siteId,hc,findings,swRows:filtered};
       }catch(err){
         console.error('Parse error from API fetch: '+err);
@@ -1609,7 +1695,7 @@ function processAll(){
           var resolvedVendor=hc['_vendor']||vendor;
           var filtered=filterAlarms(swData,siteId);
           var findings=resolvedVendor==='Samsung'?classifySamsung(hc):classifyEricsson(hc);
-          _cardData[idx]={vendor:resolvedVendor,siteId,findings,swRows:filtered};
+          _cardData[idx]={vendor:resolvedVendor,siteId,hc,findings,swRows:filtered};
           cards[idx]={vendor:resolvedVendor,siteId,hc,findings,swRows:filtered};
         }catch(err){
           console.error('Parse error on '+file.name+': '+err);
@@ -1648,22 +1734,28 @@ function _parseSection1Commands(rawText){
   var sec1 = rawText.indexOf('## Section 2') >= 0 ? rawText.split('## Section 2')[0] : rawText;
   var cmds = [], seen = {};
   function add(c){
-    c = c.trim();
-    if(c && c.length > 2 && !seen[c] && !/^https?:/.test(c) && !/^[#\-]/.test(c)){
+    c = c.trim().replace(/\s*\([^)]{0,60}\)\s*$/, '').trim(); // strip trailing (note)
+    if(c && c.length > 2 && !seen[c] && !/^https?:/.test(c) && !/^[#\-\*]/.test(c)){
       seen[c] = true; cmds.push(c);
     }
   }
-  // 1. Fenced code blocks
-  sec1.replace(/```[a-z]*\n?([\s\S]*?)```/g, function(_,b){
-    b.trim().split('\n').forEach(function(l){ add(l.trim()); });
-  });
-  // 2. Inline backticks
-  sec1.replace(/`([^`\n]{2,})`/g, function(_,c){ add(c); });
-  // 3. Bare AMOS MML keywords on their own line
+  // Primary: only lines explicitly labeled "* Command: ..." or "Command: ..."
   sec1.split('\n').forEach(function(line){
-    var l = line.trim();
-    if(/^(st|acc|set|hget|lget|lset|sdir|mfirt|alt|cv|se|pr|lm|bl|ue|ab)\s/i.test(l) && !seen[l]) add(l);
+    var m = line.match(/\bcommand\s*:\s*`?([^`\n]+)`?/i);
+    if(!m) return;
+    add(m[1]);
   });
+  // Fallback: if LLM didn't use "Command:" labels, try fenced blocks / backticks / bare keywords
+  if(!cmds.length){
+    sec1.replace(/```[a-z]*\n?([\s\S]*?)```/g, function(_,b){
+      b.trim().split('\n').forEach(function(l){ add(l.trim()); });
+    });
+    sec1.replace(/`([^`\n]{2,})`/g, function(_,c){ add(c); });
+    sec1.split('\n').forEach(function(line){
+      var l = line.trim();
+      if(/^(st|acc|set|hget|lget|lset|sdir|mfirt|alt|cv|se|pr|lm|bl|ue|ab)\s/i.test(l) && !seen[l]) add(l);
+    });
+  }
   return cmds;
 }
 

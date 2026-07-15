@@ -649,7 +649,7 @@ def amos_run_cmd():
         channel.send(command + "\r\n")
         raw = _amos_read_until(channel, prompt_re, timeout=AMOS_CMD_TIMEOUT)
         output = prompt_re.sub('', raw).strip()
-        print(f"[AMOS] {session_id}/{node}: {command!r} → {len(output)}c", flush=True)
+        print(f"[AMOS] {session_id}/{node}: {command!r} -> {len(output)}c", flush=True)
         return jsonify({"success": True, "output": output})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
