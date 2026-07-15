@@ -1204,61 +1204,165 @@ function viewPrompt(idx, btn){
   }
 }
 
-function runDiag(idx){
+async function runDiag(idx){
   var d=_cardData[idx];if(!d) return;
   var siteId=d.siteId, vendor=d.vendor;
-  var prompt=vendor==='Samsung'?buildPromptSamsung(siteId,d.findings,d.swRows,d.hc):buildPromptEricsson(siteId,d.findings,d.swRows,d.hc);
-  var context=vendor+' '+d.findings.label;
 
   document.getElementById('run-btn-'+idx).disabled=true;
-  document.getElementById('spinner-'+idx).classList.add('active');
-  document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> 🧠 Building diagnostic prompt from parsed data...';
   document.getElementById('ai-result-'+idx).innerHTML='';
 
-  setTimeout(function(){
-    if(document.getElementById('spinner-'+idx).classList.contains('active'))
-      document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> 📡 Firing prompt at the Verizon LLM Gateway... hope it\'s awake.';
-  },1200);
-  setTimeout(function(){
-    if(document.getElementById('spinner-'+idx).classList.contains('active'))
-      document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> ✍️ LLM is writing your troubleshooting guide... probably in cursive.';
-  },4000);
-  setTimeout(function(){
-    if(document.getElementById('spinner-'+idx).classList.contains('active'))
-      document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> 🤖 Still generating... the AI is being thorough. Suspiciously thorough.';
-  },10000);
+  // Samsung: HC-based prompt (no AMOS)
+  if(vendor==='Samsung'){
+    document.getElementById('spinner-'+idx).classList.add('active');
+    document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Building Samsung diagnostic prompt...';
+    var prompt=buildPromptSamsung(siteId,d.findings,d.swRows,d.hc);
+    await _runDiagLLM(idx,prompt,'Samsung '+d.findings.label,d.findings);
+    return;
+  }
 
-  // Auto-start AMOS session immediately when diagnosis begins
-  _amosSess[idx]={sessionId:null,node:siteId,status:'disconnected',
-    commands:[],stepStates:{},outputHtml:''};
+  // Ericsson: AMOS-first -- run health check commands, send raw output to LLM
+  _amosSess[idx]={sessionId:null,node:siteId,status:'disconnected',commands:[],stepStates:{},outputHtml:''};
   _renderAmosPanel(idx);
-  amosConnect(idx);
+  document.getElementById('spinner-'+idx).classList.add('active');
+  document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Connecting to AMOS...';
 
-  fetch('diagnose',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({prompt:prompt,context:context})
-  })
-  .then(function(r){return r.json();})
-  .then(function(resp){
+  var conn=await _amosConnectRaw(idx,siteId);
+  if(!conn.success){
     document.getElementById('spinner-'+idx).classList.remove('active');
-    document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Analyzing...';
+    document.getElementById('run-btn-'+idx).disabled=false;
+    document.getElementById('ai-result-'+idx).innerHTML='<p style="color:var(--red);margin-top:12px">&#9888; AMOS connection failed: '+escHtml(conn.error)+'</p>';
+    return;
+  }
+
+  var diagCmds=[
+    'alt',
+    'lt all',
+    'st EUtranCellFDD|NRCellDU|EUtranCellTDD',
+    'st sect',
+    'hget sectorcarrier=* noOfMutedTxAntennas|noOfRxAntennas|noOfTxAntennas|noOfusedRxAntenna|noOfusedTxAntenna',
+    'hget ru- product|state',
+    'hget ^rilink state|linkRate|riportref|linkid',
+    'sdir',
+    'fault',
+    'mfirt',
+    'hget SfpModule=ri',
+    'hget rfport=[A-H]|freqbanddata vswr',
+    'hget nearu admin|oper|uniqueid|device|productNumber|rfportref'
+  ];
+  var rawParts=[];
+  for(var ci=0;ci<diagCmds.length;ci++){
+    var cmd=diagCmds[ci];
+    document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> AMOS: '+escHtml(cmd)+' ('+(ci+1)+'/'+diagCmds.length+')';
+    _amosLog(idx,siteId+' > '+cmd,'ao-cmd');
+    try{
+      var r=await fetch('amos-run-cmd',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({session_id:_amosSess[idx].sessionId,command:cmd})});
+      var j=await r.json();
+      if(j.output){_amosLog(idx,j.output);rawParts.push('=== '+cmd+' ===
+'+j.output);}
+      else{rawParts.push('=== '+cmd+' ===
+(no output)');}
+    }catch(err){
+      _amosLog(idx,'Error: '+(err.message||err),'ao-err');
+      rawParts.push('=== '+cmd+' ===
+[Error: '+(err.message||String(err))+']');
+    }
+  }
+
+  document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Sending AMOS output to LLM...';
+  var rawOutput=rawParts.join('
+
+');
+  var prompt=buildPromptFromAmosOutput(siteId,rawOutput);
+  await _runDiagLLM(idx,prompt,'Ericsson AMOS '+siteId,d.findings);
+}
+
+async function _amosConnectRaw(idx,node){
+  var s=_amosSess[idx];
+  s.node=node; s.status='connecting';
+  _renderAmosPanel(idx);
+  _amosLog(idx,'Connecting to '+node+' via ENM...','ao-cmd');
+  try{
+    var r=await fetch('amos-connect',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({node:node})});
+    var j=await r.json();
+    if(!j.success) throw new Error(j.error);
+    s.sessionId=j.session_id; s.status='connected';
+    if(j.banner) _amosLog(idx,j.banner);
+    _amosLog(idx,'Session '+j.session_id+' ready','ao-ok');
+    _renderAmosPanel(idx);
+    return{success:true};
+  }catch(err){
+    s.status='error';
+    _amosLog(idx,'Connection failed: '+(err.message||err),'ao-err');
+    _renderAmosPanel(idx);
+    return{success:false,error:err.message||String(err)};
+  }
+}
+
+function buildPromptFromAmosOutput(neid,rawOutput){
+  return 'You are an Ericsson 5G/4G RAN NOC engineer at Verizon Wireless analyzing a node that is Out Of Service (OOS).
+
+'+
+    'Node: '+neid+'
+
+'+
+    'AMOS Health Check Output (raw session output):
+'+
+    rawOutput.slice(0,12000)+'
+
+'+
+    'Respond with exactly two sections:
+
+'+
+    '## Section 1 -- Remote Troubleshooting Steps
+'+
+    'Numbered steps the NOC technician can attempt remotely via AMOS. For each step use exactly these labels:
+'+
+    '* Command: <exact AMOS/ENM command>
+'+
+    '* Pass Criteria: <what normal output looks like>
+'+
+    '* Fail Action: <what to do if abnormal>
+'+
+    '* End: <next step or escalation>
+'+
+    'Prioritize steps based on the fault evidence in the output above. End the last step with: "If all remote steps fail, proceed to Section 2."
+
+'+
+    '## Section 2 -- Dispatch Instructions
+'+
+    'State clearly: DISPATCH WARRANTED -- Yes / No / Pending (exhaust remote first).
+'+
+    'If yes: specific scope of work for the field technician referencing exact fault evidence (port IDs, FRU/PN/SN, link IDs).
+'+
+    'If no or pending: which remote steps must succeed first.
+'+
+    'Be concise (3-5 steps per task).';
+}
+
+async function _runDiagLLM(idx,prompt,context,findings){
+  var d=_cardData[idx];
+  try{
+    var r=await fetch('diagnose',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({prompt:prompt,context:context})});
+    var resp=await r.json();
+    document.getElementById('spinner-'+idx).classList.remove('active');
     document.getElementById('run-btn-'+idx).disabled=false;
     if(!resp.success){
       document.getElementById('ai-result-'+idx).innerHTML=
         '<p style="color:var(--red);margin-top:12px">&#9888; LLM error: '+escHtml(resp.error)+'</p>';
       return;
     }
-    renderAIResult(idx,resp.result,d.findings);
-  })
-  .catch(function(err){
+    renderAIResult(idx,resp.result,findings||d.findings);
+  }catch(err){
     document.getElementById('spinner-'+idx).classList.remove('active');
-    document.getElementById('spinner-'+idx).innerHTML='<span class="spin-icon">&#8987;</span> Analyzing...';
     document.getElementById('run-btn-'+idx).disabled=false;
     document.getElementById('ai-result-'+idx).innerHTML=
       '<p style="color:var(--red);margin-top:12px">&#9888; Request failed: '+escHtml(err.message||err)+'</p>';
-  });
+  }
 }
+
 
 function renderAIResult(idx,result,findings){
   var sec1='',sec2='';
