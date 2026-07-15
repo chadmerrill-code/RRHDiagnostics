@@ -1112,13 +1112,14 @@ function renderCard(vendor,siteId,hc,findings,swRows,idx){
   }).join('');
 
   var summary=buildSummary(siteId,vendor,findings);
+  var amosOnly = Object.keys(hc).length === 0;
   var prompt='';
-  try{prompt=vendor==='Samsung'?buildPromptSamsung(siteId,findings,swRows):buildPromptEricsson(siteId,findings,swRows);}
+  try{if(!amosOnly) prompt=vendor==='Samsung'?buildPromptSamsung(siteId,findings,swRows):buildPromptEricsson(siteId,findings,swRows);}
   catch(e){prompt='Error: '+e;}
 
   return '<div class="site-card" id="card-'+idx+'">'+
     '<div class="site-card-header"><span class="site-title">Site '+escHtml(siteId)+'</span>'+vBadge+'</div>'+
-    '<div class="kpi-row">'+kpiHtml+'</div>'+
+    (amosOnly?'':    '<div class="kpi-row">'+kpiHtml+'</div>'+
     '<div class="fault-row">'+
       '<span class="section-label">Fault Classification:</span><span class="fault-badge '+archCls+'">'+escHtml(findings.label)+'</span>'+
       '<span class="section-label" style="margin-left:12px">Dispatch Warranted:</span><span class="fault-badge '+dispCls+'">'+dispTxt+'</span>'+
@@ -1128,7 +1129,7 @@ function renderCard(vendor,siteId,hc,findings,swRows,idx){
       '<div id="alarms-'+idx+'">'+alarmHtml+'</div>'+
     '</div>'+
     '<div class="tabs-wrapper"><div class="tab-nav">'+tabNavHtml+'</div>'+tabBodyHtml+'</div>'+
-    '<div class="summary-box'+(findings.dispatchWarranted?'':' no-dispatch')+'">'+escHtml(summary)+'</div>'+
+    '<div class="summary-box'+(findings.dispatchWarranted?'':' no-dispatch')+'">'+escHtml(summary)+'</div>')+
     '<div class="ai-section">'+
       '<h3>&#129302; AI Diagnostic Output</h3>'+
       '<button class="run-btn" id="run-btn-'+idx+'" onclick="runDiag('+idx+')">&#9654;  Run AI Diagnosis</button>'+
