@@ -1577,7 +1577,7 @@ function renderHCList(data,panel,start,end){
       col(130,escHtml(enodebs),'flex:1;min-width:130px')+
       col(120,escHtml(by))+
       col(150,escHtml(createdOn))+
-      (canLoad?'<button class="load-hc-btn" onclick="loadExistingHC(\''+rid.replace(/'/g,"\\'")+'\',\''+firstNeid.replace(/'/g,"\\'")+'\')">Load</button>':
+      (canLoad?'<button class="load-hc-btn" onclick="loadExistingHC(\''+rid.replace(/'/g,"\\'")+'\',\''+enodebs.replace(/'/g,"\\'")+'\')">Load</button>':
                '<span style="color:var(--muted);font-size:.75em;min-width:44px">'+escHtml(status)+'</span>')+
     '</div>';
   }).join('');
