@@ -1991,15 +1991,34 @@ async function amosCloseSession(idx){
   _renderAmosPanel(idx);
 }
 
-// Auto-fill from URL params — pre-fill fields and show recent HCs; never auto-start a new health check
-// Link format: /rrh/?token=<site_token>&eid=<eid>
+function _launchFromNeid(neid){
+  // Create a minimal Ericsson card and auto-run AMOS-first diagnosis
+  var findings={
+    archetype:'AMOS_CHECK', label:'AMOS Live Check', dispatchWarranted:false,
+    disabledCells:[], disabledRadios:[], nokLinks:[], riLinks:[],
+    pimHigh:[], noisyBranches:[], hwFrus:[], swAlarms:[]
+  };
+  _cardData={};
+  _cardData[0]={vendor:'Ericsson', siteId:neid, hc:{}, findings:findings, swRows:[]};
+  document.getElementById('results').innerHTML=renderCard('Ericsson',neid,{},findings,[],0);
+  switchRightTab('diag');
+  setTimeout(function(){ runDiag(0); }, 200);
+}
+
+// Auto-fill from URL params — pre-fill fields, launch AMOS diagnosis if neid= provided
+// Link formats: /rrh/?neid=168867  |  /rrh/?token=<token>&eid=<eid>
 (function(){
   var p=new URLSearchParams(location.search);
+  var neid=p.get('neid')||'';
   var token=p.get('token')||p.get('site_token')||'';
   var eid=p.get('eid')||'';
-  if(token) document.getElementById('api-site-token').value=token;
-  if(eid)   document.getElementById('api-eid').value=eid;
-  if(token) loadHCList();
+  if(neid){
+    _launchFromNeid(neid.trim());
+  } else {
+    if(token) document.getElementById('api-site-token').value=token;
+    if(eid)   document.getElementById('api-eid').value=eid;
+    if(token) loadHCList();
+  }
   // restore saved font size
   var sel=document.getElementById('hc-font-select');
   if(sel) sel.value=String(_hcFontPx);
